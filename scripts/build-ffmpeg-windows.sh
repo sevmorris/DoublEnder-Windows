@@ -50,12 +50,13 @@ cd "$work/ffmpeg-$FFMPEG_VERSION"
 
 # Exactly what AACEncoder's command needs: read a file of raw Float32 mono,
 # resample to 48 kHz, encode with the native AAC encoder, write an M4A
-# (FFmpeg's "ipod" muxer). The ffmpeg program pulls in the few filters it
+# (FFmpeg's "ipod" muxer), and report progress on stdout (-progress pipe:1,
+# hence the pipe protocol). The ffmpeg program pulls in the few filters it
 # always uses (aformat, anull, ...); aresample is named because it converts.
 components=(
     --disable-everything --disable-autodetect --disable-network
     --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice
-    --enable-protocol=file
+    --enable-protocol=file --enable-protocol=pipe
     --enable-demuxer=pcm_f32le --enable-decoder=pcm_f32le
     --enable-filter=aresample --enable-filter=aformat --enable-filter=anull
     --enable-encoder=aac
@@ -104,7 +105,7 @@ config() { grep -hE "^#define CONFIG_$1 " config.h config_components.h | awk '{p
 for flag in GPL NONFREE VERSION3; do
     [ "$(config $flag)" = 0 ] || { echo "FAIL: CONFIG_$flag is set; this build must stay LGPL-2.1" >&2; exit 1; }
 done
-for part in FFMPEG AAC_ENCODER IPOD_MUXER PCM_F32LE_DEMUXER PCM_F32LE_DECODER FILE_PROTOCOL ARESAMPLE_FILTER; do
+for part in FFMPEG AAC_ENCODER IPOD_MUXER PCM_F32LE_DEMUXER PCM_F32LE_DECODER FILE_PROTOCOL PIPE_PROTOCOL ARESAMPLE_FILTER; do
     [ "$(config $part)" = 1 ] || { echo "FAIL: CONFIG_$part is missing" >&2; exit 1; }
 done
 if [ $native = 0 ]; then

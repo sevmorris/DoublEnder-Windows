@@ -23,6 +23,9 @@ public final class RecorderController {
     public private(set) var state: AppState = .selectingMic
     /// STOP was pressed and the take is being finalized (AAC encodes).
     public private(set) var isStopping = false
+    /// How far an AAC take's encode has got, 0…1, while `isStopping`; nil
+    /// before ffmpeg first reports and for a WAV.
+    public private(set) var saveProgress: Double?
     public private(set) var recordingTime: Double = 0
     /// Set once quitting is approved; the main loop exits on it.
     public private(set) var shouldQuit = false
@@ -78,6 +81,10 @@ public final class RecorderController {
         let saved = settings.outputFormat ?? .aac
         outputFormat = (saved == .aac && !aacAvailable) ? .wav : saved
 
+        engine.onSaveProgress = { [weak self] fraction in
+            guard let self, self.isStopping else { return }
+            self.saveProgress = fraction
+        }
         engine.onTakeFailed = { [weak self] failure in
             self?.handleTakeFailure(failure)
         }
@@ -279,6 +286,7 @@ public final class RecorderController {
         let alreadyFinalizing = isFinalizingRecording
         isFinalizingRecording = true
         isStopping = true
+        saveProgress = nil
 
         engine.stopRecording { [weak self] result in
             guard let self else { completion?(); return }
@@ -291,6 +299,7 @@ public final class RecorderController {
             }
             self.isFinalizingRecording = false
             self.isStopping = false
+            self.saveProgress = nil
             let diskReason = self.diskStopReason
             let diskNote = diskReason.map { Self.diskStopNote(reason: $0) }
             self.diskStopReason = nil
