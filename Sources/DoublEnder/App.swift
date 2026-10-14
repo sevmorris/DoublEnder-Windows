@@ -47,7 +47,7 @@ final class App {
         defer { CloseWindow() }
         // The close request is ours to answer: a take may be running.
         SetExitKey(Int32(KEY_NULL.rawValue))
-        SetTargetFPS(60)
+        SetTargetFPS(30)
         let icon = LoadImage(renderer.resources.appendingPathComponent("Images/app_icon.png").path)
         SetWindowIcon(icon)
         UnloadImage(icon)
@@ -94,8 +94,18 @@ final class App {
     /// best it does allow: some GLX setups have no framebuffer config that
     /// is both transparent and multisampled.
     private func openWindow() -> Bool {
-        let base = FLAG_WINDOW_UNDECORATED.rawValue | FLAG_WINDOW_HIGHDPI.rawValue
-            | FLAG_WINDOW_ALWAYS_RUN.rawValue | FLAG_VSYNC_HINT.rawValue
+        var base = FLAG_WINDOW_UNDECORATED.rawValue | FLAG_WINDOW_HIGHDPI.rawValue
+            | FLAG_WINDOW_ALWAYS_RUN.rawValue
+        // Vsync everywhere but Windows. There the compositor already keeps a
+        // windowed app from tearing, and a vsynced SwapBuffers waits on the
+        // driver's pacing against DWM. On an Intel UHD 620 (driver
+        // 27.20.100.9749) that wait ran for seconds at a time, and with the
+        // UI thread stuck in it the window stopped taking input: a hang dump
+        // had the UI thread in SwapBuffers and the driver's thread in
+        // DwmFlush. raylib's own source warns that vsync "hit[s] a critical
+        // render path in Intel HD Graphics". Without the flag raylib sets a
+        // swap interval of 0, and SetTargetFPS paces the frames.
+        if !Platform.isWindows { base |= FLAG_VSYNC_HINT.rawValue }
         let attempts = [
             base | FLAG_WINDOW_TRANSPARENT.rawValue | FLAG_MSAA_4X_HINT.rawValue,
             base | FLAG_WINDOW_TRANSPARENT.rawValue,
@@ -140,13 +150,13 @@ final class App {
     /// whatever the window is cleared to.
     private var isTransparent = true
 
-    private var targetFPS: Int32 = 60
+    private var targetFPS: Int32 = 30
 
-    /// Full frame rate only while the guest is looking: for most of a
-    /// session the window sits behind the call, on a laptop whose fan the
-    /// mic can hear. The audio never waits on the frame rate.
+    /// 30 fps is plenty for a counter and a level meter: at 60 the faceplate
+    /// took ~16% of an Intel UHD 620, on a laptop whose fan the mic can
+    /// hear. Minimised, 5. The audio never waits on the frame rate.
     private func pace() {
-        let fps: Int32 = IsWindowMinimized() ? 5 : (IsWindowFocused() ? 60 : 30)
+        let fps: Int32 = IsWindowMinimized() ? 5 : 30
         guard fps != targetFPS else { return }
         targetFPS = fps
         SetTargetFPS(fps)

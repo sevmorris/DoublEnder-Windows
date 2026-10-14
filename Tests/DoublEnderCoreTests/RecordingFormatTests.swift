@@ -195,6 +195,21 @@ final class RecordingFormatTests: XCTestCase {
                       "notes are written as the description tag")
     }
 
+    /// The encode after STOP reports how far it has got, for "SAVING… 42%".
+    func testAACEncodeReportsProgress() throws {
+        try XCTSkipUnless(AACEncoder.isAvailable, "ffmpeg not installed")
+        let url = dir.appendingPathComponent("Take.m4a")
+        let take = try TakeWriter(mainURL: url, format: .aac, notes: "", sampleRate: 48_000)
+        let tone = (0..<48_000 * 3).map { Float(sin(Double($0) * 2 * .pi * 440 / 48_000) * 0.5) }
+        try take.write(samples(tone))
+        var fractions: [Double] = []
+        guard case .saved = take.finish(progress: { fractions.append($0) }) else { return XCTFail("not saved") }
+        XCTAssertFalse(fractions.isEmpty, "ffmpeg reported no progress")
+        XCTAssertEqual(fractions.last ?? 0, 1, accuracy: 0.1, "the last report is the whole take")
+        XCTAssertEqual(fractions, fractions.sorted(), "never goes backwards")
+        XCTAssertTrue(MP4File.isFinished(url))
+    }
+
     func testCancelledTakeDeletesEverything() throws {
         let url = dir.appendingPathComponent("Take.wav")
         let take = try TakeWriter(mainURL: url, format: .wav, notes: "", sampleRate: 48_000)

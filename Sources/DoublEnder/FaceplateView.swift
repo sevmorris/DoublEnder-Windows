@@ -125,7 +125,9 @@ final class FaceplateView {
         r.fillRounded(rect, radius: radius, recording ? Theme.stopFill : Theme.recordIdleFill)
         if state.held { r.fillRounded(rect, radius: radius, Theme.black.opacity(0.18)) }
 
-        let label = controller.isStopping ? "SAVING…" : (recording ? "PRESS TO STOP" : "PRESS TO RECORD")
+        // An AAC take encodes after STOP, minutes for a long one: say how far.
+        let saving = controller.saveProgress.map { "SAVING… \(Int($0 * 100))%" } ?? "SAVING…"
+        let label = controller.isStopping ? saving : (recording ? "PRESS TO STOP" : "PRESS TO RECORD")
         var size = s(27)
         let tracking = s(3)
         // Both labels share one size; shrink (to 85% at most) only if the

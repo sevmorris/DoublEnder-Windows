@@ -95,45 +95,112 @@ public enum AACEncoder {
 
     /// Writes `output` through a temporary name and renames it into place,
     /// so a finished M4A never coexists with a half-written one.
-    static func encode(sidecar: URL, sampleRate: Double, notes: String, to output: URL) throws {
+    ///
+    /// `progress` gets the fraction encoded, 0…1, about twice a second, on
+    /// this thread: ffmpeg's native encoder runs at roughly 12× real time on
+    /// an older laptop, so a 35-minute take takes about 3 minutes to save.
+    static func encode(sidecar: URL, sampleRate: Double, notes: String, to output: URL,
+                       progress: ((Double) -> Void)? = nil) throws {
         guard let ffmpeg = ffmpegPath else { throw RecordingError.encoderMissing }
         let partial = output.deletingLastPathComponent()
             .appendingPathComponent(".\(output.lastPathComponent).part")
-        try? FileManager.default.removeItem(at: partial)
+        let seconds = Double(max(0, (PCMSidecar.fileSize(sidecar) ?? 0) - Int64(PCMSidecar.headerSizeV2)))
+            / 4 / max(1, sampleRate)
 
-        var arguments = [
-            "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            "-f", "f32le", "-ar", String(Int(sampleRate.rounded())), "-ac", "1",
-            "-skip_initial_bytes", String(PCMSidecar.headerSizeV2),
-            "-i", sidecar.path,
-            "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "1",
-        ]
-        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedNotes.isEmpty {
-            arguments += ["-metadata", "description=\(trimmedNotes)"]
+        func arguments(reportingProgress: Bool) -> [String] {
+            var arguments = ["-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
+            if reportingProgress { arguments += ["-nostats", "-progress", "pipe:1"] }
+            arguments += [
+                "-f", "f32le", "-ar", String(Int(sampleRate.rounded())), "-ac", "1",
+                "-skip_initial_bytes", String(PCMSidecar.headerSizeV2),
+                "-i", sidecar.path,
+                "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "1",
+            ]
+            let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedNotes.isEmpty {
+                arguments += ["-metadata", "description=\(trimmedNotes)"]
+            }
+            return arguments + ["-f", "ipod", partial.path]
         }
-        arguments += ["-f", "ipod", partial.path]
 
+        try? FileManager.default.removeItem(at: partial)
+        var run = try runFFmpeg(ffmpeg, arguments(reportingProgress: progress != nil), seconds: seconds, progress: progress)
+        // An ffmpeg without the pipe protocol (an older build beside the
+        // app, say) refuses -progress pipe:1 before it starts. Encode
+        // without the percentage rather than fail the save.
+        if run.status != 0, progress != nil, run.message.contains("progress URL") {
+            Log.info("ffmpeg can't report progress; encoding without it")
+            try? FileManager.default.removeItem(at: partial)
+            run = try runFFmpeg(ffmpeg, arguments(reportingProgress: false), seconds: seconds, progress: nil)
+        }
+        guard run.status == 0, MP4File.isFinished(partial) else {
+            try? FileManager.default.removeItem(at: partial)
+            let detail = run.message.split(whereSeparator: \.isNewline).last.map(String.init) ?? "exit \(run.status)"
+            throw RecordingError.encoderFailed(detail)
+        }
+        try FileManager.default.moveItem(at: partial, to: output)
+    }
+
+    /// Runs ffmpeg to the end. Returns its exit status and what it wrote to
+    /// stderr; its stdout carries `-progress` blocks when asked for.
+    private static func runFFmpeg(_ ffmpeg: String, _ arguments: [String], seconds: Double,
+                                  progress: ((Double) -> Void)?) throws -> (status: Int32, message: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpeg)
         process.arguments = arguments
         let errors = Pipe()
+        let report = Pipe()
         process.standardError = errors
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = report
         do {
             try process.run()
         } catch {
             throw RecordingError.encoderFailed("couldn't start ffmpeg")
         }
-        let message = errors.fileHandleForReading.readDataToEndOfFile()
+        // stderr is read on its own thread, so neither pipe can fill up and
+        // stall ffmpeg while the other is being read.
+        let stderr = PipeDrain(errors)
+        readProgress(report, seconds: seconds, into: progress)
+        let message = String(decoding: stderr.wait(), as: UTF8.self)
         process.waitUntilExit()
-        guard process.terminationStatus == 0, MP4File.isFinished(partial) else {
-            try? FileManager.default.removeItem(at: partial)
-            let detail = String(decoding: message, as: UTF8.self)
-                .split(whereSeparator: \.isNewline).last.map(String.init) ?? "exit \(process.terminationStatus)"
-            throw RecordingError.encoderFailed(detail)
+        return (process.terminationStatus, message)
+    }
+
+    /// Reads ffmpeg's `-progress` blocks until it closes the pipe, passing on
+    /// `out_time_us` as a fraction of the take's `seconds`.
+    private static func readProgress(_ pipe: Pipe, seconds: Double, into progress: ((Double) -> Void)?) {
+        let key = "out_time_us="
+        var pending = Data()
+        while true {
+            let chunk = pipe.fileHandleForReading.availableData
+            if chunk.isEmpty { return }
+            pending.append(chunk)
+            while let newline = pending.firstIndex(of: 0x0A) {
+                let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
+                pending.removeSubrange(pending.startIndex...newline)
+                guard let progress, seconds > 0, line.hasPrefix(key),
+                      let microseconds = Double(line.dropFirst(key.count)) else { continue }
+                progress(min(1, max(0, microseconds / 1_000_000 / seconds)))
+            }
         }
-        try FileManager.default.moveItem(at: partial, to: output)
+    }
+}
+
+/// Reads a pipe to its end on a background thread; `wait()` returns it all.
+private final class PipeDrain {
+    private var data = Data()
+    private let done = DispatchSemaphore(value: 0)
+
+    init(_ pipe: Pipe) {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            done.signal()
+        }
+    }
+
+    func wait() -> Data {
+        done.wait()
+        return data
     }
 }
 
@@ -199,8 +266,9 @@ final class TakeWriter {
         case failed(Error)
     }
 
-    /// Finishes the take. Slow for AAC (it encodes), so not on the pump.
-    func finish() -> Outcome {
+    /// Finishes the take. Slow for AAC (it encodes), so not on the pump;
+    /// `progress` follows the encode (see `AACEncoder.encode`).
+    func finish(progress: ((Double) -> Void)? = nil) -> Outcome {
         if framesWritten == 0 {
             wav?.abandon()
             try? FileManager.default.removeItem(at: mainURL)
@@ -221,7 +289,8 @@ final class TakeWriter {
             guard let sidecar else { return .failed(RecordingError.noActiveRecording) }
             sidecar.close()
             do {
-                try AACEncoder.encode(sidecar: sidecar.url, sampleRate: sampleRate, notes: notes, to: mainURL)
+                try AACEncoder.encode(sidecar: sidecar.url, sampleRate: sampleRate, notes: notes, to: mainURL,
+                                      progress: progress)
                 try? FileManager.default.removeItem(at: sidecar.url)
                 return .saved(mainURL)
             } catch {

@@ -105,6 +105,9 @@ public final class AudioEngine {
 
     /// The engine stopped a take. Fires at most once per take.
     public var onTakeFailed: ((CaptureFailure) -> Void)?
+    /// While a stopped AAC take encodes: the fraction done, 0…1, each time
+    /// it passes a whole percent.
+    public var onSaveProgress: ((Double) -> Void)?
     /// The device list changed; `added` excludes the first enumeration.
     public var onDevicesChanged: ((_ added: [InputDevice]) -> Void)?
     /// The bound device vanished while no take was running.
@@ -546,7 +549,7 @@ public final class AudioEngine {
         let dropped = capture.map { de_capture_frames_dropped($0) &- droppedAtTakeStart } ?? 0
         let format = self.format
         lock.unlock()
-        finishQueue.async {
+        finishQueue.async { [weak self] in
             // Everything the pump handed over reaches the files first.
             activeTake.drain()
             let writer = activeTake.sink
@@ -555,7 +558,14 @@ public final class AudioEngine {
                 writer.cancel()
                 result = .success(nil)
             } else {
-                switch writer.finish() {
+                var lastPercent = -1
+                let report: (Double) -> Void = { fraction in
+                    let percent = Int(fraction * 100)
+                    guard percent != lastPercent else { return }
+                    lastPercent = percent
+                    MainQueue.post { self?.onSaveProgress?(fraction) }
+                }
+                switch writer.finish(progress: report) {
                 case .saved(let url): result = .success(url)
                 case .nothingWritten: result = .success(nil)
                 case .failed(let error): result = .failure(error)
