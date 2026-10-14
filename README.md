@@ -1,11 +1,11 @@
 # DoublEnder for Windows and Linux
 
-The DoublEnder Local recorder, rebuilt as a Swift package that runs on Windows and Linux. It has the same faceplate and one-button flow as the Mac app. Its crash-recovery sidecar uses the same file format, so a `.pcmrec` file can be recovered on any of the three systems. The Mac app in `../DoublEnder` is untouched; this folder is self-contained.
+The DoublEnder Local recorder, rebuilt as a Swift package that runs on Windows and Linux. It has the same faceplate and one-button flow as the Mac app. Its crash-recovery sidecar uses the same file format, so a `.pcmrec` file can be recovered on any of the three systems. The Mac app in `../DoublEnder` is untouched; this folder builds on its own, and its packages take the repository's `LICENSE`.
 
 | | Status |
 |---|---|
-| Linux | Built and tested on Arch Linux (KDE Plasma on Wayland, PipeWire, AMD graphics): records WAV and AAC, crash recovery, UI. |
-| Windows | Written for Windows but **not yet built on Windows.** `.github/workflows/cross-platform.yml` builds, tests and packages it on a Windows runner. |
+| Linux | Built and tested on Arch Linux (KDE Plasma on Wayland, PipeWire, AMD graphics): records WAV and AAC, crash recovery, UI. CI builds, tests and packages it on Ubuntu 24.04. |
+| Windows | Records on a Windows 10 laptop with a USB microphone, after two fixes from its first run there: capture no longer waits on the disk, and only the window's corners are transparent. CI (`.github/workflows/cross-platform.yml`) builds, tests and packages it on Windows Server 2025. Still to check by hand: see Known gaps. |
 
 ## Building
 
@@ -49,17 +49,17 @@ The zip contains `DoublEnder.exe`, `Resources\`, the Swift runtime DLLs, the Vis
 
 | Target | What it is |
 |---|---|
-| `CMiniaudio` | [miniaudio](https://miniaud.io) 0.11.25 and `de_audio.c`, a small capture layer. The real-time callback copies native-format frames into a lock-free ring buffer and never enters Swift. |
-| `CRaylib` | [raylib](https://www.raylib.com) 5.5 with its bundled GLFW, for the window and drawing. |
+| `CMiniaudio` | [miniaudio](https://miniaud.io) 0.11.25 and `de_audio.c`, a small capture layer. The real-time callback copies native-format frames into a lock-free ring buffer and never enters Swift. `de_audio_win.c` finds which bus (USB, Bluetooth) a Windows input is on. |
+| `CRaylib` | [raylib](https://www.raylib.com) 5.5 with its bundled GLFW, for the window and drawing, and DoublEnder's additions to it (see below). |
 | `CPlatform` | `de_platform.c`: the single-instance lock, and on Windows a message box and bringing a window forward. |
-| `DoublEnderCore` | Everything except drawing: `AudioEngine` (devices, the pump thread, watchdogs), `TakeWriter` (24-bit WAV, the sidecar, AAC), `PCMSidecar`, `CrashRecovery`, and `RecorderController`, which ports `RecorderViewModel`. |
+| `DoublEnderCore` | Everything except drawing: `AudioEngine` (devices, the pump thread, watchdogs), `TakeIO` (the take's disk writes, off the pump), `TakeWriter` (24-bit WAV, the sidecar, AAC), `PCMSidecar`, `CrashRecovery`, `InstanceLock`, `Log`, and `RecorderController`, which ports `RecorderViewModel`. |
 | `DoublEnder` | The faceplate UI and main loop, plus command-line diagnostics. |
 
 Names, messages and behaviour follow `../docs/THEORY_OF_OPERATION.md` wherever the platforms allow:
 
 - The four watchdogs: first buffer (5 s), data flow (3 s), the 1-second input-health poll, and dropped audio.
 - The disconnect latch: the first failure path wins.
-- The disk checks: fail closed at 50 MB (AAC) or 200 MB (WAV), polled every 5 s while recording.
+- The disk checks: fail closed at 200 MB (WAV) or, for AAC, at 50 MB plus room for the M4A that ffmpeg writes when the take stops (about 2 MB per recorded minute), polled every 5 s while recording.
 - The mono mix: the Mac's measured AVAssetWriter weights, applied to miniaudio's channel map.
 - The DEP2 sidecar and launch-time crash recovery, with the same dialogs and the same 8 KB rule. The sidecar is synced every 2.5 s rather than every 512 KB (§3's ~2.7 s at 48 kHz): by time, so a slow sync never limits how fast a backlog is written.
 - Capture never waits on the disk, as on the Mac: the pump hands each block to `TakeIO`, which writes the WAV and the sidecar in order on its own queue, holding a slow disk's backlog in memory. The port first wrote on the pump, and on an older Windows laptop the sidecar's syncs held it up long enough to overflow the 10 s ring and fail the take with "Audio was dropped". The log has a line per take: the input format, dropped frames, the longest wait between ring reads, the slowest write and sync, and the largest backlog.
@@ -69,7 +69,7 @@ Names, messages and behaviour follow `../docs/THEORY_OF_OPERATION.md` wherever t
 - **AAC needs ffmpeg.** Linux and Windows have no built-in AAC encoder Swift can call. An AAC take records only to the Float32 sidecar while it runs. When it stops, ffmpeg encodes 256 kbps mono at 48 kHz, with the notes in the description tag, into a temporary file that is renamed into place. A take is therefore crash-safe from its first sample. If encoding fails, the sidecar is recovered to a WAV on the spot. Without ffmpeg (next to the app or on `PATH`), the format picker offers WAV only. The Windows zip carries its own minimal build (see Building); Linux uses the system's.
 - **WAV** is written as on the Mac: 24-bit mono at the device's native rate. The header sizes stay at zero until the take finishes, so a crashed WAV reads as empty and recovery uses the sidecar.
 - **Popovers and dialogs** are drawn inside the window, because raylib can't open the Mac's floating panels.
-- **Window controls:** the borderless window has small minimise and close buttons in the plate's top-right corner. Ctrl+Q / Ctrl+W quit through the same "Recording in progress" prompt as ⌘Q. Shortcuts follow the key's label in the current layout, so Ctrl+A on a French keyboard doesn't quit.
+- **Window controls:** the borderless window has small minimise and close buttons in the plate's top-right corner. Ctrl+Q / Ctrl+W quit through the same "Recording in progress" prompt as ⌘Q, and Ctrl+M minimises. Shortcuts follow the key's label in the current layout, so Ctrl+A on a French keyboard doesn't quit.
 - **One copy at a time:** the Mac gets this from LaunchServices; here the app holds a lock (a named mutex on Windows, an `flock` in `$XDG_RUNTIME_DIR` on Linux). A second copy's crash recovery would otherwise treat the first copy's take in progress as abandoned. Launched again on Windows, the app brings the running window forward; on Linux it says it is already open.
 - **Moving the window:** dragging empty parts of the faceplate asks the window manager to run the move, as a title-bar drag does (`_NET_WM_MOVERESIZE` on X11, a caption click on Windows). Moving it from the app jittered on scaled Wayland desktops, where the app's X11 coordinates and the compositor's don't agree.
 - **Default input:** each launch starts on the system's default input, not the built-in mic. A newly connected microphone triggers the "Microphone detected — switch?" offer, unless it is Bluetooth: earbuds connect on their own mid-call, and their mic is call quality. The Mac offers USB devices only; here anything but Bluetooth is offered, so audio interfaces on other buses are too. The bus comes from the controller's Plug and Play instance ID on Windows (`de_audio_win.c`, as Chromium does it) and from the PulseAudio/PipeWire source name on Linux. `--list-devices` shows it.
@@ -103,9 +103,11 @@ For development, `--recordings-dir DIR` saves takes somewhere other than the Des
 
 The app logs to `%LOCALAPPDATA%\DoublEnder\DoublEnder.log` or `~/.local/state/DoublEnder/DoublEnder.log` (`$XDG_STATE_HOME`), moved aside to `DoublEnder.previous.log` once it passes 1 MB: the file to ask a guest for when something went wrong. It holds errors and device names, never audio or notes. A Windows release build logs only there; elsewhere the log also goes to stderr.
 
+If no OpenGL 3.3 window can be opened, the app says so in a system dialog rather than exiting silently: a message box on Windows, zenity or kdialog on Linux.
+
 ## Known gaps
 
-- Windows has been run on one Windows 10 laptop with a USB microphone, which records through WASAPI. Still to check: the microphone privacy switch (it should show the "Microphone access is turned off" error), the Desktop path under OneDrive, high-DPI scaling, and that only the window's corners are transparent.
-- On Windows, ffmpeg is started through Foundation's `Process`, which doesn't pass `CREATE_NO_WINDOW`. A console window will probably flash while an AAC take is encoded. Encoding through Media Foundation would fix that and remove the need to ship ffmpeg.
+- Windows has been run on one Windows 10 laptop with a USB microphone, which records through WASAPI. Still to check: the microphone privacy switch (it should show the "Microphone access is turned off" error), Bluetooth earbuds (not offered as a new microphone), a second launch (it should bring the first window forward), the Desktop path under OneDrive, high-DPI scaling, and that only the window's corners are transparent.
+- On Windows, ffmpeg is started through Foundation's `Process`, which doesn't pass `CREATE_NO_WINDOW`, so a console window probably flashes while an AAC take is encoded. Starting ffmpeg with `CreateProcessW` and that flag would hide it. Media Foundation's AAC encoder would do without ffmpeg, but it tops out at 192 kbps (and takes 16-bit input), below the Mac's 256 kbps.
 - Linux runs under X11, or XWayland on Wayland desktops. Native Wayland would need GLFW's generated protocol sources.
 - Releases are unsigned. Windows SmartScreen will warn on first run until the exe is code-signed.
