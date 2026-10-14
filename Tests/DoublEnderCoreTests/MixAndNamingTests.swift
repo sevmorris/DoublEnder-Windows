@@ -64,6 +64,34 @@ final class MixAndNamingTests: XCTestCase {
         XCTAssertEqual(named.pathExtension, "m4a")
     }
 
+    /// Which bus a device is on, from what each platform gives us.
+    func testDeviceBusClassification() {
+        func bus(_ name: String, id: String = "", controller: String = "") -> InputDevice.Bus {
+            InputDevice.bus(name: name, idText: id, controllerID: controller)
+        }
+        // Windows: the controller's instance ID decides, whatever the name says.
+        XCTAssertEqual(bus("Microphone (Shure MV7)", controller: "USB\\VID_14ED&PID_1012&MI_00\\7&1A2B"), .usb)
+        XCTAssertEqual(bus("Headset (AirPods Pro)", controller: "BTHHFENUM\\BthHFPAudio\\8&2F1B"), .bluetooth)
+        XCTAssertEqual(bus("Headset (WH-1000XM4)", controller: "BTHENUM\\{0000111e-0000}_VID&0001"), .bluetooth)
+        XCTAssertEqual(bus("Microphone (USB Audio Device)", controller: "HDAUDIO\\FUNC_01&VEN_10EC"), .other)
+        // Linux: PulseAudio/PipeWire source names.
+        XCTAssertEqual(bus("Shure MV7 Mono", id: "alsa_input.usb-Shure_Inc_Shure_MV7-00.mono-fallback"), .usb)
+        XCTAssertEqual(bus("AirPods Pro", id: "bluez_input.AA_BB_CC_DD_EE_FF.0"), .bluetooth)
+        XCTAssertEqual(bus("Built-in Audio Analog Stereo", id: "alsa_input.pci-0000_00_1f.3.analog-stereo"), .other)
+        // Nothing to go on but the name.
+        XCTAssertEqual(bus("USB PnP Sound Device"), .usb)
+    }
+
+    /// An AAC take writes its M4A only when it stops, so the room it needs
+    /// grows with the take; a WAV's doesn't.
+    func testAACDiskFloorGrowsWithTheTake() {
+        let mb: Int64 = 1024 * 1024
+        XCTAssertEqual(DiskSpaceChecker.minimumFreeBytes(for: .aac), 50 * mb)
+        let hour = DiskSpaceChecker.minimumFreeBytes(for: .aac, recordedSeconds: 3600)
+        XCTAssertEqual(Double(hour - 50 * mb), 3600 * 256_000 / 8 * 1.05, accuracy: 1)
+        XCTAssertEqual(DiskSpaceChecker.minimumFreeBytes(for: .wav, recordedSeconds: 3600), 200 * mb)
+    }
+
     #if !os(Windows)
     func testXDGUserDirsParsing() {
         let text = """

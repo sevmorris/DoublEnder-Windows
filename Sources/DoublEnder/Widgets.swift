@@ -52,7 +52,7 @@ final class Input {
             if let scalar = Unicode.Scalar(UInt32(codepoint)) { typed.append(Character(scalar)) }
         }
         keysPressed.removeAll()
-        for key in [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE, KEY_BACKSPACE, KEY_TAB, KEY_Q, KEY_W, KEY_V, KEY_M] {
+        for key in [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE, KEY_BACKSPACE, KEY_TAB] {
             let code = Int32(key.rawValue)
             if IsKeyPressed(code) || IsKeyPressedRepeat(code) { keysPressed.insert(code) }
         }
@@ -71,6 +71,15 @@ final class Input {
     }
 
     func keyPressed(_ key: KeyboardKey) -> Bool { keysPressed.contains(Int32(key.rawValue)) }
+
+    /// Ctrl+`letter`, by the key that types the letter in the current
+    /// keyboard layout (`DE_ShortcutKey`), not by its US position.
+    func shortcut(_ letter: Character, repeats: Bool = false) -> Bool {
+        guard control, let ascii = letter.asciiValue else { return false }
+        let key = DE_ShortcutKey(Int32(ascii))
+        guard key != 0 else { return false }
+        return IsKeyPressed(key) || (repeats && IsKeyPressedRepeat(key))
+    }
 
     /// Marks the press as handled without a control (e.g. closing a popover).
     func claimPress() { pressClaimed = true }
@@ -111,8 +120,11 @@ enum TextEditing {
     static func edit(_ text: inout String, id: String, input: Input, multiline: Bool, limit: Int) -> Bool {
         guard input.focusedField == id else { return false }
         var submitted = false
-        if input.control && input.keyPressed(KEY_V), let clip = GetClipboardText() {
+        if input.shortcut("v", repeats: true), let clip = GetClipboardText() {
+            // Windows puts CRLF on the clipboard; keep its line breaks.
             var pasted = String(cString: clip)
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
             if !multiline { pasted = pasted.replacingOccurrences(of: "\n", with: " ") }
             text += pasted.filter { !$0.isASCII || $0.asciiValue! >= 32 || $0 == "\n" }
         } else if !input.control {

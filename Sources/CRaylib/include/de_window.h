@@ -11,4 +11,9 @@ int DE_GetCursorScreenPosition(int *x, int *y);
 // the platform has no way to do this.
 int DE_BeginWindowMove(void);
 
+// The raylib key code of the key that types `letter` (a-z) in the current
+// keyboard layout, for Ctrl shortcuts; the US position if no key types it.
+// Returns 0 for anything but a letter.
+int DE_ShortcutKey(int letter);
+
 #endif

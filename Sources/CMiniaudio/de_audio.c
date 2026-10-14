@@ -88,6 +88,28 @@ int de_context_capture_devices(de_context* ctx, de_device_entry* out, int cap)
     return n;
 }
 
+#if defined(_WIN32)
+/* de_audio_win.c: kept apart because it needs the Windows SDK's audio
+   headers, whose COM declarations would collide with miniaudio's own. */
+void de_win_endpoint_controller(const wchar_t* endpointID, char* out, size_t capacity);
+#endif
+
+void de_context_device_controller(de_context* ctx, const ma_device_id* id, char* out, size_t capacity)
+{
+    if (capacity == 0) {
+        return;
+    }
+    out[0] = '\0';
+#if defined(_WIN32)
+    if (ctx->ctx.backend == ma_backend_wasapi) {
+        de_win_endpoint_controller((const wchar_t*)id->wasapi, out, capacity);
+    }
+#else
+    (void)ctx;
+    (void)id;
+#endif
+}
+
 /* ---- Capture ------------------------------------------------------------- */
 
 struct de_capture {

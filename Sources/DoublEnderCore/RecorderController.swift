@@ -55,6 +55,7 @@ public final class RecorderController {
     private var dismissedNewDevices: Set<String> = []
     private var isFinalizingRecording = false
     private var quitWhenStopped = false
+    private var quitPromptID: UUID?
     private var launched = false
 
     private var nextDiskCheck: Double = 0
@@ -77,8 +78,8 @@ public final class RecorderController {
         let saved = settings.outputFormat ?? .aac
         outputFormat = (saved == .aac && !aacAvailable) ? .wav : saved
 
-        engine.onDisconnectedDuringRecording = { [weak self] reason in
-            self?.handleDisconnectDuringRecording(reason: reason)
+        engine.onTakeFailed = { [weak self] failure in
+            self?.handleTakeFailure(failure)
         }
         engine.onActiveInputLostWhileIdle = { [weak self] in
             guard let self, !self.suppressIdleInputLossAlert else { return }
@@ -93,11 +94,17 @@ public final class RecorderController {
     // MARK: - Launch
 
     /// Clears session settings, runs crash recovery and binds an input.
-    public func launch() {
+    ///
+    /// Crash recovery is only safe in the one running recorder: anything else
+    /// (the command-line diagnostics) passes false, or it could take a take
+    /// in progress for an abandoned one.
+    public func launch(recoverInterruptedTakes: Bool = true) {
         guard !launched else { return }
         launched = true
         settings.filenameBase = ""
-        CrashRecovery.run(in: recordingsDirectory, dialogs: dialogs)
+        if recoverInterruptedTakes {
+            CrashRecovery.run(in: recordingsDirectory, dialogs: dialogs)
+        }
 
         guard engine.hasAudioBackend else {
             state = .error(Platform.isWindows
@@ -253,7 +260,8 @@ public final class RecorderController {
 
     private func checkDiskSpaceDuringRecording() {
         guard isCurrentlyRecording,
-              let reason = DiskSpaceChecker.recordingBlockedReason(for: recordingsDirectory, format: outputFormat)
+              let reason = DiskSpaceChecker.recordingBlockedReason(
+                  for: recordingsDirectory, format: outputFormat, recordedSeconds: recordingTime)
         else { return }
         diskStopReason = reason
         stopRecording()
@@ -315,7 +323,10 @@ public final class RecorderController {
             }
             self.pendingDisconnectReason = nil
             completion?()
-            if self.quitWhenStopped { self.shouldQuit = true }
+            if self.quitWhenStopped {
+                self.prepareForExit()
+                self.shouldQuit = true
+            }
         }
     }
 
@@ -386,14 +397,22 @@ public final class RecorderController {
 
     // MARK: - Device changes
 
-    private func handleDisconnectDuringRecording(reason: String) {
-        suppressIdleInputLossAlert = true
-        pendingDisconnectReason = reason
-        stopRecording { [weak self] in
-            guard let self else { return }
-            self.presentDisconnectAlert(reason: reason)
-            self.switchToFallbackInputAfterLoss()
-            self.suppressIdleInputLossUntil = Platform.now() + 1
+    private func handleTakeFailure(_ failure: CaptureFailure) {
+        pendingDisconnectReason = failure.reason
+        switch failure {
+        case .inputLost(let reason):
+            suppressIdleInputLossAlert = true
+            stopRecording { [weak self] in
+                guard let self else { return }
+                self.presentDisconnectAlert(reason: reason)
+                self.switchToFallbackInputAfterLoss()
+                self.suppressIdleInputLossUntil = Platform.now() + 1
+            }
+        case .recordingFailed(let reason):
+            // The mic is fine, so it stays selected.
+            stopRecording { [weak self] in
+                self?.presentRecordingFailedAlert(reason: reason)
+            }
         }
     }
 
@@ -404,7 +423,11 @@ public final class RecorderController {
            engine.availableInputDevices.contains(where: { $0.uid == selectedInputDeviceID }) {
             selectInput(selectedInputDeviceID)
         }
-        if let newest = added.last {
+        // Bluetooth earbuds connect on their own, often mid-call. Their mic
+        // records at call quality (16 kHz), and opening it drops what the
+        // guest hears to call quality too. They stay in the picker; they just
+        // aren't offered.
+        if let newest = added.last(where: { !$0.isBluetooth }) {
             presentNewDevicePrompt(for: newest)
         }
     }
@@ -461,6 +484,13 @@ public final class RecorderController {
             buttons: [.init("OK", isDefault: true)]))
     }
 
+    private func presentRecordingFailedAlert(reason: String) {
+        dialogs.present(Dialog(
+            icon: .warning, title: "RECORDING STOPPED",
+            message: "\(reason). What was recorded has been saved if possible.",
+            buttons: [.init("OK", isDefault: true)]))
+    }
+
     private func presentInputLostWhileIdleAlert() {
         guard shouldPresentInputLossAlert() else { return }
         dialogs.present(Dialog(
@@ -496,22 +526,45 @@ public final class RecorderController {
             shouldQuit = true
             return
         }
-        dialogs.present(Dialog(
+        // Asked already: a second Alt+F4 doesn't stack another prompt.
+        guard !dialogs.items.contains(where: { $0.id == quitPromptID }) else { return }
+        let prompt = Dialog(
             icon: .warning, title: "RECORDING IN PROGRESS",
             message: "Stopping now will save what has been recorded so far. Quitting without saving will lose the current recording.",
             buttons: [
                 .init("STOP & SAVE", isDefault: true) { [weak self] in
-                    self?.quitWhenStopped = true
-                    self?.stopRecording { self?.prepareForExit() }
+                    guard let self else { return }
+                    if self.isCurrentlyRecording && !self.isStopping {
+                        self.quitWhenStopped = true
+                        self.stopRecording()
+                    } else if self.isStopping {
+                        // Already saving: quit when it's done.
+                        self.quitWhenStopped = true
+                    } else {
+                        // The engine stopped and saved the take while the
+                        // prompt was up; nothing is left to stop.
+                        self.prepareForExit()
+                        self.shouldQuit = true
+                    }
                 },
                 .init("QUIT WITHOUT SAVING") { [weak self] in
-                    self?.abortRecording {
-                        self?.prepareForExit()
-                        self?.shouldQuit = true
+                    guard let self else { return }
+                    // The engine stopped the take while the prompt was up and
+                    // it is being saved: let that finish rather than exit
+                    // halfway through writing the file.
+                    if self.isStopping {
+                        self.quitWhenStopped = true
+                        return
+                    }
+                    self.abortRecording {
+                        self.prepareForExit()
+                        self.shouldQuit = true
                     }
                 },
                 .init("CANCEL", isCancel: true),
-            ]), first: true)
+            ])
+        quitPromptID = prompt.id
+        dialogs.present(prompt, first: true)
     }
 
     private func prepareForExit() {

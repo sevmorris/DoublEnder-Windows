@@ -56,12 +56,21 @@ final class Renderer {
     private var vignette: Texture2D?
 
     /// ASCII, Latin-1, Latin Extended-A, and the punctuation the app's
-    /// strings use (— … ’ “ ” • → ✓).
-    private static let codepoints: [Int32] = {
+    /// strings use (— … ’ “ ” • → ✓). Enough for the LCD and panel faces,
+    /// which only draw the app's own labels.
+    private static let labelCodepoints: [Int32] = {
         var points = Array(Int32(32)...Int32(126)) + Array(Int32(160)...Int32(383))
         points += [0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2026, 0x2192, 0x2713]
         return points
     }()
+
+    /// The text faces also draw what the system and the guest supply: device
+    /// names, the Desktop's localised name, typed notes. The bundled Noto
+    /// fonts cover Latin Extended-B, Greek and Cyrillic, so those load too.
+    /// ASCII stays first: raylib finds a glyph by searching in this order.
+    private static let textCodepoints: [Int32] = labelCodepoints
+        + Array(Int32(0x0180)...Int32(0x024F)) + Array(Int32(0x0370)...Int32(0x03FF))
+        + Array(Int32(0x0400)...Int32(0x04FF))
 
     init(resources: URL) {
         self.resources = resources
@@ -86,7 +95,7 @@ final class Renderer {
         let key = "\(face.rawValue)@\(pixels)"
         if let font = fonts[key] { return font }
         let path = resources.appendingPathComponent("Fonts/\(face.rawValue)").path
-        var points = Self.codepoints
+        var points = (face == .lcd || face == .panel) ? Self.labelCodepoints : Self.textCodepoints
         let font = points.withUnsafeMutableBufferPointer { buf in
             LoadFontEx(path, pixels, buf.baseAddress, Int32(buf.count))
         }

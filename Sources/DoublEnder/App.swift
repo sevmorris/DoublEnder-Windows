@@ -14,6 +14,11 @@ final class App {
     let overlays: Overlays
     /// Development aid: see `UITour`.
     var tour: UITour?
+    /// Another copy is running: this one only says so, then quits. It never
+    /// launches the recorder, so it runs no crash recovery and saves no
+    /// settings.
+    var isDuplicateInstance = false
+    private var exitRequested = false
 
     /// The grab point relative to the window origin, in screen pixels.
     private var dragGrab: (x: Int32, y: Int32)?
@@ -32,6 +37,11 @@ final class App {
             controller.engine.shutdown()
             relaunchWithoutGLXVendorOverride()
             Log.error("Could not open a window: the graphics driver offered no usable OpenGL 3.3 configuration.")
+            // A Windows release build has no console, so without this the
+            // guest would see nothing at all.
+            Platform.showErrorBox(
+                title: AppInfo.name,
+                message: "DoublEnder couldn't open its window: this computer's graphics driver doesn't offer OpenGL 3.3, which DoublEnder needs.\n\nUpdating the graphics driver usually fixes this. On a remote desktop or a virtual machine, run DoublEnder on the computer itself.")
             return
         }
         defer { CloseWindow() }
@@ -42,10 +52,15 @@ final class App {
         SetWindowIcon(icon)
         UnloadImage(icon)
 
-        controller.launch()
+        if isDuplicateInstance {
+            presentAlreadyRunning()
+        } else {
+            controller.launch()
+        }
 
-        while !controller.shouldQuit {
-            if WindowShouldClose() { controller.requestQuit() }
+        while !controller.shouldQuit && !exitRequested {
+            pace()
+            if WindowShouldClose() { requestQuit() }
             MainQueue.drain()
             controller.tick()
             renderer.updatePixelScale()
@@ -122,11 +137,37 @@ final class App {
     /// whatever the window is cleared to.
     private var isTransparent = true
 
+    private var targetFPS: Int32 = 60
+
+    /// Full frame rate only while the guest is looking: for most of a
+    /// session the window sits behind the call, on a laptop whose fan the
+    /// mic can hear. The audio never waits on the frame rate.
+    private func pace() {
+        let fps: Int32 = IsWindowMinimized() ? 5 : (IsWindowFocused() ? 60 : 30)
+        guard fps != targetFPS else { return }
+        targetFPS = fps
+        SetTargetFPS(fps)
+    }
+
+    private func requestQuit() {
+        if isDuplicateInstance {
+            exitRequested = true
+        } else {
+            controller.requestQuit()
+        }
+    }
+
+    private func presentAlreadyRunning() {
+        controller.dialogs.present(Dialog(
+            icon: .warning, title: "ALREADY OPEN",
+            message: "DoublEnder is already running. Look for its window; it may be minimised.",
+            buttons: [.init("OK", isDefault: true) { [weak self] in self?.exitRequested = true }]))
+    }
+
     private func handleShortcuts(layer: Input.Layer) {
-        guard input.control else { return }
         // Ctrl+Q and Ctrl+W, as ⌘Q and ⌘W on the Mac.
-        if input.keyPressed(KEY_Q) || input.keyPressed(KEY_W) { controller.requestQuit() }
-        if input.keyPressed(KEY_M) { MinimizeWindow() }
+        if input.shortcut("q") || input.shortcut("w") { requestQuit() }
+        if input.shortcut("m") { MinimizeWindow() }
     }
 
     /// Dragging anywhere that isn't a control moves the window, as the

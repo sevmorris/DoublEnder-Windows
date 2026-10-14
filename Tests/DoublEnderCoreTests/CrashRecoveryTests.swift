@@ -104,7 +104,11 @@ final class CrashRecoveryTests: XCTestCase {
 
     func testLeftoverEncoderOutputIsRemoved() throws {
         try Data(count: 10).write(to: dir.appendingPathComponent(".G.m4a.part"))
+        try Data(count: 10).write(to: dir.appendingPathComponent(".G (recovered).wav.part"))
+        try Data(count: 10).write(to: dir.appendingPathComponent("download.wav.part"))  // not ours
         CrashRecovery.run(in: dir, dialogs: DialogQueue())
         XCTAssertFalse(exists(".G.m4a.part"))
+        XCTAssertFalse(exists(".G (recovered).wav.part"))
+        XCTAssertTrue(exists("download.wav.part"))
     }
 }

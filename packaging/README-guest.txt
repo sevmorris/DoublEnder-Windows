@@ -7,7 +7,9 @@ to your Desktop. Send that file to your producer when you're done.
 Starting it
   Windows: double-click DoublEnder.exe. Keep this folder together; the
            app needs the files beside it.
-  Linux:   double-click DoublEnder, or run ./DoublEnder in a terminal.
+  Linux:   open a terminal in this folder and run ./install.sh once.
+           DoublEnder is then in your applications menu, and this
+           folder can go. (Or run ./DoublEnder here without installing.)
 
 Using it
   - The microphone button (left of the meter) picks the input.

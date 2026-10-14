@@ -1,0 +1,4 @@
+module CPlatform {
+    header "de_platform.h"
+    export *
+}

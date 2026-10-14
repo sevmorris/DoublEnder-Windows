@@ -240,3 +240,39 @@ int DE_BeginWindowMove(void)
     return 0;
 #endif
 }
+
+//----------------------------------------------------------------------------------
+// DoublEnder patch: the key that types a letter in the current layout.
+//
+// raylib's key codes are physical positions named after the US layout, so on
+// AZERTY KEY_Q is the key labelled A, and Ctrl+A would quit. Shortcuts follow
+// the label, as in other apps: this asks GLFW what each letter and
+// punctuation key types now, and falls back to the US position when no key
+// types the letter (Cyrillic and Greek layouts, as other apps do).
+//----------------------------------------------------------------------------------
+int DE_ShortcutKey(int letter)
+{
+    static const int punctuation[] = {
+        GLFW_KEY_APOSTROPHE, GLFW_KEY_COMMA, GLFW_KEY_MINUS, GLFW_KEY_PERIOD, GLFW_KEY_SLASH,
+        GLFW_KEY_SEMICOLON, GLFW_KEY_EQUAL, GLFW_KEY_LEFT_BRACKET, GLFW_KEY_BACKSLASH,
+        GLFW_KEY_RIGHT_BRACKET, GLFW_KEY_GRAVE_ACCENT
+    };
+    const int punctuationCount = (int)(sizeof(punctuation)/sizeof(punctuation[0]));
+
+    if (letter >= 'A' && letter <= 'Z') letter += 'a' - 'A';
+    if (letter < 'a' || letter > 'z') return 0;
+    const int usKey = GLFW_KEY_A + (letter - 'a');
+    if (!_glfw.initialized) return usKey;
+
+    for (int i = 0; i < 26 + punctuationCount; i++)
+    {
+        const int key = (i < 26)? GLFW_KEY_A + i : punctuation[i - 26];
+        // A key this keyboard lacks has no scancode; asking its name would
+        // raise a GLFW error, which raylib logs.
+        if (glfwGetKeyScancode(key) < 0) continue;
+        const char *name = glfwGetKeyName(key, 0);
+        if ((name != NULL) && (name[0] != '\0') && (name[1] == '\0') &&
+            ((name[0] == letter) || (name[0] == letter - ('a' - 'A')))) return key;
+    }
+    return usKey;
+}

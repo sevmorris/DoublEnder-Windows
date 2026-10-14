@@ -1,9 +1,9 @@
 # Builds a Windows release folder and zip: DoublEnder.exe, its art and
-# fonts, the Swift runtime DLLs it links against and, if found, ffmpeg.exe
+# fonts, the Swift runtime DLLs it links against and, if given, ffmpeg.exe
 # for AAC. Run from a shell where `swift` works (the Swift installer puts
 # its runtime on PATH).
 #
-#   pwsh scripts/package-windows.ps1 [-Ffmpeg C:\path\to\ffmpeg.exe]
+#   pwsh scripts/package-windows.ps1 [-Ffmpeg build\ffmpeg-windows\ffmpeg.exe]
 param([string]$Ffmpeg = "")
 
 $ErrorActionPreference = 'Stop'
@@ -38,14 +38,24 @@ foreach ($dll in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
     if (Test-Path $path) { Copy-Item $path $out }
 }
 
-# AAC needs ffmpeg.exe beside DoublEnder.exe. Ship an LGPL build and its
-# licence; without it the app records WAV only.
-if (-not $Ffmpeg) { $Ffmpeg = (where.exe ffmpeg.exe 2>$null | Select-Object -First 1) }
+# AAC needs ffmpeg.exe beside DoublEnder.exe: the LGPL build that
+# scripts/build-ffmpeg-windows.sh makes (CI builds it), passed as -Ffmpeg.
+# Its licence and source note must sit beside it and ship with it. Nothing
+# is taken from PATH, so a GPL or unknown build can't slip into a release.
+# Without -Ffmpeg the app records WAV only.
 if ($Ffmpeg) {
+    $ffmpegDir = Split-Path -Parent (Resolve-Path $Ffmpeg)
+    foreach ($note in 'ffmpeg-LICENSE.txt', 'ffmpeg-SOURCE.txt') {
+        $notePath = Join-Path $ffmpegDir $note
+        if (-not (Test-Path $notePath)) {
+            throw "$note is missing beside $Ffmpeg; build ffmpeg.exe with scripts/build-ffmpeg-windows.sh"
+        }
+        Copy-Item $notePath "$out\licenses\"
+    }
     Copy-Item $Ffmpeg "$out\ffmpeg.exe"
-    Write-Host "Included ffmpeg: $Ffmpeg (add its licence to $out\licenses)"
+    Write-Host "Included ffmpeg: $Ffmpeg"
 } else {
-    Write-Host "No ffmpeg.exe found: this build records WAV only."
+    Write-Host "No -Ffmpeg: this build records WAV only."
 }
 
 Compress-Archive -Force -Path $out -DestinationPath "dist\$name.zip"

@@ -22,10 +22,13 @@ public enum CrashRecovery {
             return
         }
 
-        // An AAC encode the app didn't live to finish. Its sidecar is still
-        // here and recovers below.
-        for url in contents where url.lastPathComponent.hasPrefix(".") && url.lastPathComponent.hasSuffix(".m4a.part") {
-            try? fm.removeItem(at: url)
+        // An AAC encode or a recovery the app didn't live to finish. The
+        // sidecar each was made from is still here and recovers below.
+        for url in contents {
+            let name = url.lastPathComponent
+            if name.hasPrefix("."), name.hasSuffix(".m4a.part") || name.hasSuffix(".wav.part") {
+                try? fm.removeItem(at: url)
+            }
         }
 
         let sidecars = contents

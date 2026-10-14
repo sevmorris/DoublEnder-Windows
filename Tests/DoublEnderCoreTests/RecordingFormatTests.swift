@@ -57,7 +57,25 @@ final class RecordingFormatTests: XCTestCase {
         // A second recovery doesn't overwrite the first.
         let again = try PCMSidecar.recoverToWAV(sidecarURL: sidecar.url)
         XCTAssertEqual(again.lastPathComponent, "Take (recovered 2).wav")
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains { $0.hasSuffix(".part") },
+                       "the temporary name is gone once the WAV is complete")
     }
+
+    #if !os(Windows)  // relies on a sparse file
+    func testSidecarPastTheWAVLimitSaysSo() throws {
+        let main = dir.appendingPathComponent("Long.m4a")
+        let sidecar = try PCMSidecar(mainOutput: main, sampleRate: 48_000)
+        sidecar.close()
+        let handle = try FileHandle(forWritingTo: sidecar.url)
+        try handle.truncate(atOffset: UInt64(UInt32.max) + 1024)
+        try handle.close()
+        XCTAssertThrowsError(try PCMSidecar.recoverToWAV(sidecarURL: sidecar.url)) { error in
+            guard case .tooLongForWAV? = error as? PCMSidecar.RecoveryError else {
+                return XCTFail("expected tooLongForWAV, got \(error)")
+            }
+        }
+    }
+    #endif
 
     func testTornFinalSampleIsDroppedOnRecovery() throws {
         let main = dir.appendingPathComponent("Take.m4a")
@@ -119,6 +137,29 @@ final class RecordingFormatTests: XCTestCase {
         XCTAssertFalse(MP4File.isFinished(url), "no moov: the writer never closed it")
         try (box("ftyp", 16) + box("mdat", 100) + box("moov", 40)).write(to: url)
         XCTAssertTrue(MP4File.isFinished(url))
+    }
+
+    /// Crash recovery reads an M4A beside every sidecar at launch; a corrupt
+    /// one must read as unfinished, not crash the app on every launch.
+    func testMP4CheckSurvivesCorruptBoxSizes() throws {
+        let url = dir.appendingPathComponent("Corrupt.m4a")
+        var huge = Data()
+        withUnsafeBytes(of: UInt32(1).bigEndian) { huge.append(contentsOf: $0) }  // 64-bit size follows
+        huge.append(contentsOf: Array("ftyp".utf8))
+        withUnsafeBytes(of: UInt64.max.bigEndian) { huge.append(contentsOf: $0) }
+        huge.append(Data(count: 32))
+        try huge.write(to: url)
+        XCTAssertFalse(MP4File.isFinished(url))
+
+        var truncated = Data()
+        withUnsafeBytes(of: UInt32(8 + 16).bigEndian) { truncated.append(contentsOf: $0) }
+        truncated.append(contentsOf: Array("moov".utf8))
+        truncated.append(Data(count: 16))
+        withUnsafeBytes(of: UInt32(8 + 1000).bigEndian) { truncated.append(contentsOf: $0) }
+        truncated.append(contentsOf: Array("mdat".utf8))
+        truncated.append(Data(count: 100))  // 900 bytes short
+        try truncated.write(to: url)
+        XCTAssertFalse(MP4File.isFinished(url), "a truncated file isn't finished")
     }
 
     // MARK: - Takes

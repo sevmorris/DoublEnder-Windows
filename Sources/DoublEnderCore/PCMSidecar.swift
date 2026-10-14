@@ -108,11 +108,13 @@ public final class PCMSidecar {
     public enum RecoveryError: LocalizedError {
         case badHeader
         case emptyPayload
+        case tooLongForWAV
 
         public var errorDescription: String? {
             switch self {
             case .badHeader: return "The recovery file is missing or corrupt."
             case .emptyPayload: return "The recovery file contains no audio data."
+            case .tooLongForWAV: return "The recording is longer than one WAV file can hold (4 GB)."
             }
         }
     }
@@ -154,11 +156,10 @@ public final class PCMSidecar {
 
         let totalSize = fileSize(sidecarURL) ?? Int64(headerSize)
         let payloadSize = totalSize - Int64(headerSize)
+        guard payloadSize >= 0 else { throw RecoveryError.badHeader }
         // RIFF sizes are 32-bit: past ~4 GiB (≈6 h at 48 kHz) a WAV can't
         // say how long it is. The sidecar stays on disk.
-        guard payloadSize >= 0, payloadSize <= Int64(UInt32.max) - 36 else {
-            throw RecoveryError.badHeader
-        }
+        guard payloadSize <= Int64(UInt32.max) - 36 else { throw RecoveryError.tooLongForWAV }
         // Whole samples only: a torn final write can leave a partial one.
         let dataSize = UInt32(payloadSize) / 4 * 4
         return ParsedHeader(headerSize: headerSize, sampleRate: sampleRate,
@@ -178,23 +179,35 @@ public final class PCMSidecar {
         try input.seek(toOffset: UInt64(parsed.headerSize))
 
         let outURL = recoveredWAVURL(for: sidecarURL)
+        // Written under a temporary name and renamed once complete, so a quit
+        // halfway never leaves a WAV whose header claims audio it lacks.
+        // Launch cleanup removes a leftover one.
+        let partial = outURL.deletingLastPathComponent().appendingPathComponent(".\(outURL.lastPathComponent).part")
+        try? FileManager.default.removeItem(at: partial)
         let header = WAVFile.header(format: .float32, sampleRate: UInt32(parsed.sampleRate),
                                     channels: UInt16(parsed.channels), dataSize: parsed.dataSize)
-        guard FileManager.default.createFile(atPath: outURL.path, contents: header) else {
+        guard FileManager.default.createFile(atPath: partial.path, contents: header) else {
             throw RecordingError.cannotCreateFile(outURL.lastPathComponent)
         }
         do {
-            let output = try FileHandle(forWritingTo: outURL)
-            defer { try? output.close() }
-            try output.seekToEnd()
-            var remaining = Int(parsed.dataSize)
-            while remaining > 0, let chunk = try input.read(upToCount: min(1 << 20, remaining)), !chunk.isEmpty {
-                try output.write(contentsOf: chunk)
-                remaining -= chunk.count
+            let output = try FileHandle(forWritingTo: partial)
+            do {
+                try output.seekToEnd()
+                var remaining = Int(parsed.dataSize)
+                while remaining > 0, let chunk = try input.read(upToCount: min(1 << 20, remaining)), !chunk.isEmpty {
+                    try output.write(contentsOf: chunk)
+                    remaining -= chunk.count
+                }
+                try output.synchronize()
+                try output.close()
+            } catch {
+                try? output.close()
+                throw error
             }
-            try output.synchronize()
+            // Closed first: Windows won't rename an open file.
+            try FileManager.default.moveItem(at: partial, to: outURL)
         } catch {
-            try? FileManager.default.removeItem(at: outURL)
+            try? FileManager.default.removeItem(at: partial)
             throw error
         }
         return outURL
@@ -291,7 +304,9 @@ public enum MP4File {
             } else if size == 0 {
                 size = UInt64(total) - offset
             }
-            guard size >= 8 else { return false }
+            // A box can't run past the end of the file. A truncated file isn't
+            // finished, and a corrupt size near 2^64 would overflow `offset`.
+            guard size >= 8, size <= UInt64(total) - offset else { return false }
             if type == "moov" { sawMoov = true }
             if type == "mdat" { sawMdat = true }
             offset += size

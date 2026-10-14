@@ -51,6 +51,13 @@ typedef struct {
    negative ma_result on failure. */
 int de_context_capture_devices(de_context* ctx, de_device_entry* out, int cap);
 
+/* The Plug and Play instance ID of the controller behind a device, as UTF-8
+   in `out`: "USB\VID_…" for USB, "BTHENUM\…" or "BTHHFENUM\…" for Bluetooth,
+   "HDAUDIO\…" for built-in audio. WASAPI only, where device names don't say
+   reliably what a device is; elsewhere, or when Windows can't say, "". Can
+   take a few milliseconds, so call it once per device. */
+void de_context_device_controller(de_context* ctx, const ma_device_id* id, char* out, size_t capacity);
+
 /* ---- Capture ------------------------------------------------------------- */
 
 typedef struct de_capture de_capture;

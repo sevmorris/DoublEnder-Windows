@@ -30,6 +30,8 @@ cp -r Sources/DoublEnder/Resources "dist/$name/Resources"
 cp ../LICENSE "dist/$name/licenses/DoublEnder-LICENSE.txt"
 cp Vendor-licenses/* "dist/$name/licenses/"
 cp packaging/README-guest.txt "dist/$name/README.txt"
+cp packaging/install.sh "dist/$name/install.sh"
+chmod +x "dist/$name/install.sh"
 
 tar -C dist -czf "dist/$name.tar.gz" "$name"
 echo "dist/$name.tar.gz"

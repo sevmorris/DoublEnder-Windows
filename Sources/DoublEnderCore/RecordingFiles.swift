@@ -10,18 +10,25 @@ public enum DiskSpaceChecker {
     private static let minimumFreeBytesAAC: Int64 = 50 * 1024 * 1024
     /// WAV writes the 24-bit file and the Float32 sidecar side by side.
     private static let minimumFreeBytesWAV: Int64 = 200 * 1024 * 1024
+    /// What ffmpeg writes per recorded second when an AAC take stops:
+    /// 256 kbps, plus 5% for the container.
+    static let encodedAACBytesPerSecond: Double = 256_000 / 8 * 1.05
 
-    public static func minimumFreeBytes(for format: OutputFormat) -> Int64 {
+    /// The free space a take needs to keep going. An AAC take must also
+    /// leave room for its M4A, which is written only when it stops, so its
+    /// floor rises with `recordedSeconds`; a WAV is finished in place.
+    public static func minimumFreeBytes(for format: OutputFormat, recordedSeconds: Double = 0) -> Int64 {
         switch format {
-        case .aac: return minimumFreeBytesAAC
+        case .aac: return minimumFreeBytesAAC + Int64(max(0, recordedSeconds) * encodedAACBytesPerSecond)
         case .wav: return minimumFreeBytesWAV
         }
     }
 
     /// nil when there is room; otherwise the message for the user.
-    public static func recordingBlockedReason(for directory: URL, format: OutputFormat) -> String? {
+    public static func recordingBlockedReason(for directory: URL, format: OutputFormat,
+                                              recordedSeconds: Double = 0) -> String? {
         let place = RecordingFiles.locationName(for: directory)
-        let required = minimumFreeBytes(for: format)
+        let required = minimumFreeBytes(for: format, recordedSeconds: recordedSeconds)
         guard let free = availableBytes(at: directory) else {
             return "Could not verify available disk space. Free up space on the \(place) and try again."
         }

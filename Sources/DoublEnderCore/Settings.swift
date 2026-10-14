@@ -81,18 +81,3 @@ public final class SettingsStore {
         }
     }
 }
-
-/// Minimal stderr logging. Never logs audio, notes or file contents.
-public enum Log {
-    public static func info(_ message: @autoclosure () -> String) {
-        write("info", message())
-    }
-
-    public static func error(_ message: @autoclosure () -> String) {
-        write("error", message())
-    }
-
-    private static func write(_ level: String, _ message: String) {
-        FileHandle.standardError.write(Data("[DoublEnder] \(level): \(message)\n".utf8))
-    }
-}

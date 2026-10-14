@@ -7,14 +7,37 @@ public struct InputDevice: Equatable {
     public let uid: String
     public let name: String
     public let isDefault: Bool
-    /// From the backend's own words: PulseAudio names a USB source
-    /// "alsa_input.usb-…", Windows endpoints often say "USB Audio". A
-    /// heuristic, used only for the "you plugged in a mic" offer.
-    public let isUSB: Bool
+    /// What it is plugged into, for the "you plugged in a mic" offers.
+    public let bus: Bus
     let idBytes: [UInt8]
+
+    public enum Bus {
+        case usb
+        case bluetooth
+        case other
+    }
+
+    public var isUSB: Bool { bus == .usb }
+    public var isBluetooth: Bool { bus == .bluetooth }
 
     public static func == (a: InputDevice, b: InputDevice) -> Bool {
         a.uid == b.uid && a.name == b.name && a.isDefault == b.isDefault
+    }
+
+    /// Windows: the controller's Plug and Play instance ID says
+    /// (`de_context_device_controller`); every Bluetooth enumerator's name
+    /// starts BTH (BTHENUM, BTHHFENUM, BTHLEDEVICE). Linux: PulseAudio and
+    /// PipeWire name sources "bluez_input.…" and "alsa_input.usb-…".
+    /// Otherwise the name, which is only a hint.
+    static func bus(name: String, idText: String, controllerID: String) -> Bus {
+        let controller = controllerID.uppercased()
+        if controller.hasPrefix("BTH") { return .bluetooth }
+        if controller.hasPrefix("USB\\") { return .usb }
+        if !controller.isEmpty { return .other }
+        let id = idText.lowercased()
+        if id.hasPrefix("bluez") || id.contains("bluealsa") { return .bluetooth }
+        if id.contains("usb") || name.lowercased().contains("usb") { return .usb }
+        return .other
     }
 }
 
@@ -25,6 +48,21 @@ public struct CaptureFormat {
     public let sampleFormat: SampleFormat
     public let channelMap: [UInt8]
     let gains: [Float]
+}
+
+/// Why the engine stopped a take. The reason is user-facing.
+public enum CaptureFailure {
+    /// The input went away or went quiet: unplugged, no audio, stopped.
+    case inputLost(String)
+    /// The input is fine but the take couldn't continue: a file write
+    /// failed (a full disk, the WAV size limit) or audio was dropped.
+    case recordingFailed(String)
+
+    public var reason: String {
+        switch self {
+        case .inputLost(let reason), .recordingFailed(let reason): return reason
+        }
+    }
 }
 
 /// Result of stopping a take: `.success(url)` saved, `.success(nil)` no
@@ -63,8 +101,8 @@ public final class AudioEngine {
     public private(set) var accessDenied = false
     public let backendName: String
 
-    /// A take's input failed; the reason is user-facing. Fires once per take.
-    public var onDisconnectedDuringRecording: ((String) -> Void)?
+    /// The engine stopped a take. Fires at most once per take.
+    public var onTakeFailed: ((CaptureFailure) -> Void)?
     /// The device list changed; `added` excludes the first enumeration.
     public var onDevicesChanged: ((_ added: [InputDevice]) -> Void)?
     /// The bound device vanished while no take was running.
@@ -96,6 +134,8 @@ public final class AudioEngine {
     private let finishQueue = DispatchQueue(label: "DoublEnder.finish", qos: .userInitiated)
     private var pump: Thread?
     private var knownUIDs: Set<String>?
+    /// Controller IDs by device uid; `deviceQueue` only.
+    private var controllerIDs: [String: String] = [:]
 
     static let firstBufferTimeout: Double = 5
     static let dataFlowTimeout: Double = 3
@@ -159,7 +199,7 @@ public final class AudioEngine {
     public func refreshDevices(completion: (() -> Void)? = nil) {
         guard let context else { completion?(); return }
         deviceQueue.async { [weak self] in
-            let devices = Self.enumerate(context)
+            let devices = self?.enumerate(context)
             MainQueue.post {
                 self?.applyDeviceList(devices)
                 completion?()
@@ -167,22 +207,36 @@ public final class AudioEngine {
         }
     }
 
-    static func enumerate(_ context: OpaquePointer) -> [InputDevice]? {
+    /// Runs on `deviceQueue`.
+    private func enumerate(_ context: OpaquePointer) -> [InputDevice]? {
         let capacity = 128
         var entries = [de_device_entry](repeating: de_device_entry(), count: capacity)
         let count = Int(de_context_capture_devices(context, &entries, Int32(capacity)))
         guard count >= 0 else { return nil }
         return entries.prefix(count).compactMap { entry in
-            let name = cString(entry.name)
-            let uid = cString(entry.uid)
+            let name = Self.cString(entry.name)
+            let uid = Self.cString(entry.uid)
             let idBytes = withUnsafeBytes(of: entry.id) { Array($0) }
             // The backend's own id text, where it is text (PulseAudio, ALSA).
             let idText = String(decoding: idBytes.prefix { $0 != 0 }, as: UTF8.self)
-            guard !name.isEmpty, !isLoopback(name: name, idText: idText) else { return nil }
-            let haystack = (name + " " + idText).lowercased()
-            return InputDevice(uid: uid, name: name, isDefault: entry.isDefault != 0,
-                               isUSB: haystack.contains("usb"), idBytes: idBytes)
+            guard !name.isEmpty, !Self.isLoopback(name: name, idText: idText) else { return nil }
+            let bus = InputDevice.bus(name: name, idText: idText,
+                                      controllerID: controllerID(of: entry, uid: uid, context: context))
+            return InputDevice(uid: uid, name: name, isDefault: entry.isDefault != 0, bus: bus, idBytes: idBytes)
         }
+    }
+
+    /// What `de_context_device_controller` says about a device, asked once
+    /// per device: on Windows it walks the device topology, and the list is
+    /// re-read every second or two. Runs on `deviceQueue`.
+    private func controllerID(of entry: de_device_entry, uid: String, context: OpaquePointer) -> String {
+        if let known = controllerIDs[uid] { return known }
+        var id = entry.id
+        var buffer = [CChar](repeating: 0, count: 512)
+        de_context_device_controller(context, &id, &buffer, buffer.count)
+        let controller = String(cString: buffer)
+        controllerIDs[uid] = controller
+        return controller
     }
 
     /// Loopback "inputs" that record the computer's output, not a mic:
@@ -211,7 +265,7 @@ public final class AudioEngine {
         let recording = isRecordingActive
         if let bound = boundDeviceUID, !uids.contains(bound) {
             if recording {
-                triggerCaptureFailure("The microphone was disconnected")
+                triggerCaptureFailure(.inputLost("The microphone was disconnected"))
             } else if engineHealthy {
                 closeCapture()
                 onActiveInputLostWhileIdle?()
@@ -436,7 +490,7 @@ public final class AudioEngine {
                 if let activeTake, activeTake.sidecarFailed { sidecarFailedFlag = true }
                 lock.unlock()
                 if let writeError {
-                    triggerCaptureFailure("Writing the recording failed (\(writeError.localizedDescription))")
+                    triggerCaptureFailure(.recordingFailed("Writing the recording failed (\(writeError.localizedDescription))"))
                 }
             }
 
@@ -492,17 +546,17 @@ public final class AudioEngine {
         }
         // Watchdog 4: armed at record start, met by the first written sample.
         if take.framesWritten == 0, now - startedAt > Self.firstBufferTimeout {
-            triggerCaptureFailure("The microphone delivered no audio")
+            triggerCaptureFailure(.inputLost("The microphone delivered no audio"))
             return
         }
         // Watchdog 2: data stopped arriving mid-take.
         if take.framesWritten > 0, now - lastData > Self.dataFlowTimeout {
-            triggerCaptureFailure("The microphone stopped delivering audio")
+            triggerCaptureFailure(.inputLost("The microphone stopped delivering audio"))
             return
         }
         // The backend stopped the device: unplugged, or the server went away.
         if notifications & UInt32(DE_NOTE_STOPPED) != 0 {
-            triggerCaptureFailure("The microphone was disconnected")
+            triggerCaptureFailure(.inputLost("The microphone was disconnected"))
             return
         }
         // The pump fell behind and the ring overflowed.
@@ -510,14 +564,14 @@ public final class AudioEngine {
         if droppedThisTake > 0 {
             lock.lock(); droppedFrameWarningFlag = true; lock.unlock()
             if Double(droppedThisTake) > sampleRate * Self.droppedFailureSeconds {
-                triggerCaptureFailure("Audio was dropped — the computer couldn't keep up")
+                triggerCaptureFailure(.recordingFailed("Audio was dropped — the computer couldn't keep up"))
             }
         }
     }
 
     /// The disconnect latch: the first failure path of a take wins, and the
     /// controller hears about it exactly once.
-    private func triggerCaptureFailure(_ reason: String) {
+    private func triggerCaptureFailure(_ failure: CaptureFailure) {
         lock.lock()
         guard take != nil, pendingEnd == nil, !disconnectStopPending else {
             lock.unlock()
@@ -525,8 +579,8 @@ public final class AudioEngine {
         }
         disconnectStopPending = true
         lock.unlock()
-        Log.error("Take stopped by engine: \(reason)")
-        MainQueue.post { [weak self] in self?.onDisconnectedDuringRecording?(reason) }
+        Log.error("Take stopped by engine: \(failure.reason)")
+        MainQueue.post { [weak self] in self?.onTakeFailed?(failure) }
     }
 
     // MARK: - Helpers

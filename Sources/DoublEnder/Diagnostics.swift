@@ -22,10 +22,11 @@ enum Diagnostics {
     static func listDevices() -> Int32 {
         let controller = RecorderController(settings: SettingsStore(directory: nil))
         print("Audio backend: \(controller.engine.backendName)")
-        controller.launch()
+        controller.launch(recoverInterruptedTakes: false)
         pump(controller, timeout: 5) { controller.state != .selectingMic }
         for device in controller.inputDevices {
-            print("\(device.isDefault ? "*" : " ") \(device.name)\(device.isUSB ? "  [usb]" : "")")
+            let bus = device.isUSB ? "  [usb]" : (device.isBluetooth ? "  [bluetooth]" : "")
+            print("\(device.isDefault ? "*" : " ") \(device.name)\(bus)")
         }
         if controller.inputDevices.isEmpty { print("No capture devices found.") }
         pump(controller, timeout: 5) { controller.canStartRecording }
@@ -43,7 +44,7 @@ enum Diagnostics {
     static func testRecord(seconds: Double, format: OutputFormat, directory: URL) -> Int32 {
         let controller = RecorderController(settings: SettingsStore(directory: nil), recordingsDirectory: directory)
         controller.outputFormat = format
-        controller.launch()
+        controller.launch(recoverInterruptedTakes: false)
         guard pump(controller, timeout: 10, until: { controller.canStartRecording }) else {
             print("Input never became ready: \(controller.engine.lastOpenError ?? String(describing: controller.state))")
             controller.engine.shutdown()

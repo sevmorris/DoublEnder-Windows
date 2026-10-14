@@ -61,9 +61,32 @@ if let secondsText = takeValue(after: "--test-record") {
     exit(Diagnostics.testRecord(seconds: seconds, format: format, directory: recordingsDirectory))
 }
 
+// One recorder at a time (see InstanceLock). The diagnostics above don't
+// take the lock: they never run crash recovery.
+var instanceLock: InstanceLock?
+var isDuplicateInstance = false
+switch InstanceLock.acquire() {
+case .acquired(let lock):
+    instanceLock = lock
+    Log.startFile(in: Platform.logDirectory)
+case .alreadyRunning:
+    // On Windows, bring the running copy forward (GLFW30 is GLFW's window
+    // class) and leave it at that. Elsewhere, say so in a window of our own.
+    if Platform.activateExistingWindow(className: "GLFW30", title: AppInfo.name) {
+        exit(0)
+    }
+    isDuplicateInstance = true
+case .unavailable:
+    Log.startFile(in: Platform.logDirectory)
+    Log.error("Couldn't check for another running copy; starting anyway.")
+}
+
 let controller = RecorderController(recordingsDirectory: recordingsDirectory)
 let app = App(controller: controller, resources: resourcesDirectory())
+app.isDuplicateInstance = isDuplicateInstance
 if let tourDirectory {
     app.tour = UITour(directory: URL(fileURLWithPath: tourDirectory, isDirectory: true))
 }
-app.run()
+withExtendedLifetime(instanceLock) {
+    app.run()
+}

@@ -1,3 +1,4 @@
+import CPlatform
 import Foundation
 
 /// Everything that differs between Linux and Windows, in one place.
@@ -51,6 +52,30 @@ public enum Platform {
         return base.appendingPathComponent(AppInfo.name)
     }
 
+    /// Where the log file lives: %LOCALAPPDATA%\DoublEnder, or
+    /// $XDG_STATE_HOME/DoublEnder (~/.local/state/DoublEnder).
+    public static var logDirectory: URL {
+        let env = ProcessInfo.processInfo.environment
+        #if os(Windows)
+        guard let local = env["LOCALAPPDATA"].flatMap({ $0.isEmpty ? nil : $0 }) else { return settingsDirectory }
+        return URL(fileURLWithPath: local).appendingPathComponent(AppInfo.name)
+        #else
+        let base = env["XDG_STATE_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/state")
+        return base.appendingPathComponent(AppInfo.name)
+        #endif
+    }
+
+    /// Where the single-instance lock file lives (not used on Windows, which
+    /// uses a named mutex): the per-user runtime directory, else settings.
+    public static var instanceLockDirectory: URL {
+        if let runtime = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"], !runtime.isEmpty,
+           isDirectory(URL(fileURLWithPath: runtime)) {
+            return URL(fileURLWithPath: runtime)
+        }
+        return settingsDirectory
+    }
+
     /// `XDG_<name>_DIR` from ~/.config/user-dirs.dirs, with $HOME expanded.
     static func xdgUserDirectory(_ name: String) -> URL? {
         let env = ProcessInfo.processInfo.environment
@@ -99,9 +124,11 @@ public enum Platform {
         #else
         // The FileManager1 D-Bus interface selects the file in GNOME Files,
         // Dolphin, Nemo and others; xdg-open of the folder is the fallback.
+        // This waits on the main thread, so it gives up after 2 s rather than
+        // dbus-send's default 25 s.
         let uri = file.absoluteString
         if let dbus = findExecutable("dbus-send"),
-           run(dbus, ["--session", "--print-reply", "--dest=org.freedesktop.FileManager1",
+           run(dbus, ["--session", "--print-reply", "--reply-timeout=2000", "--dest=org.freedesktop.FileManager1",
                       "--type=method_call", "/org/freedesktop/FileManager1",
                       "org.freedesktop.FileManager1.ShowItems",
                       "array:string:\(uri)", "string:"], wait: true) == 0 {
@@ -121,6 +148,33 @@ public enum Platform {
         #else
         if let open = findExecutable("xdg-open") { run(open, [url.absoluteString]) }
         #endif
+    }
+
+    // MARK: - Without a window
+
+    /// An error shown by the system, for when the app couldn't open its own
+    /// window: a message box on Windows, zenity or kdialog on Linux. Returns
+    /// false if nothing could show it.
+    @discardableResult
+    public static func showErrorBox(title: String, message: String) -> Bool {
+        #if os(Windows)
+        return de_show_error_box(title, message) != 0
+        #else
+        let desktop = ProcessInfo.processInfo.environment["XDG_CURRENT_DESKTOP"] ?? ""
+        let kdialog = findExecutable("kdialog").map { ($0, ["--title", title, "--error", message]) }
+        let zenity = findExecutable("zenity").map { ($0, ["--error", "--no-markup", "--title=\(title)", "--text=\(message)"]) }
+        let tools = desktop.localizedCaseInsensitiveContains("KDE") ? [kdialog, zenity] : [zenity, kdialog]
+        for case let (tool, arguments)? in tools where run(tool, arguments, wait: true) != nil {
+            return true
+        }
+        return false
+        #endif
+    }
+
+    /// Brings forward another process's window with this title and window
+    /// class, restoring it if it is minimised. Windows only; elsewhere false.
+    public static func activateExistingWindow(className: String, title: String) -> Bool {
+        de_activate_window(className, title) != 0
     }
 
     @discardableResult
