@@ -549,7 +549,7 @@ public final class AudioEngine {
         let dropped = capture.map { de_capture_frames_dropped($0) &- droppedAtTakeStart } ?? 0
         let format = self.format
         lock.unlock()
-        finishQueue.async {
+        finishQueue.async { [weak self] in
             // Everything the pump handed over reaches the files first.
             activeTake.drain()
             let writer = activeTake.sink
@@ -559,7 +559,7 @@ public final class AudioEngine {
                 result = .success(nil)
             } else {
                 var lastPercent = -1
-                let report: (Double) -> Void = { [weak self] fraction in
+                let report: (Double) -> Void = { fraction in
                     let percent = Int(fraction * 100)
                     guard percent != lastPercent else { return }
                     lastPercent = percent
