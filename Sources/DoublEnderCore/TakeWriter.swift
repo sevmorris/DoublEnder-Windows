@@ -1,3 +1,4 @@
+import CPlatform
 import Foundation
 
 public enum RecordingError: LocalizedError {
@@ -93,34 +94,46 @@ public enum AACEncoder {
 
     public static var isAvailable: Bool { ffmpegPath != nil }
 
-    /// Writes `output` through a temporary name and renames it into place,
-    /// so a finished M4A never coexists with a half-written one.
+    /// Where an M4A is written until it is finished, beside its final name.
+    static func partialURL(for output: URL) -> URL {
+        output.deletingLastPathComponent().appendingPathComponent(".\(output.lastPathComponent).part")
+    }
+
+    /// Everything after the input: 256 kbps mono AAC at 48 kHz in an M4A,
+    /// the notes as its description tag, written to `partial`. Shared by
+    /// this encode and the live one (`LiveEncoder`).
+    static func outputArguments(notes: String, to partial: URL) -> [String] {
+        var arguments = ["-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "1"]
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedNotes.isEmpty {
+            arguments += ["-metadata", "description=\(trimmedNotes)"]
+        }
+        return arguments + ["-f", "ipod", partial.path]
+    }
+
+    /// Encodes the take from its sidecar: the fallback when the live
+    /// encoder couldn't finish the M4A. Writes `output` through a temporary
+    /// name and renames it into place, so a finished M4A never coexists with
+    /// a half-written one.
     ///
     /// `progress` gets the fraction encoded, 0…1, about twice a second, on
     /// this thread: ffmpeg's native encoder runs at roughly 12× real time on
-    /// an older laptop, so a 35-minute take takes about 3 minutes to save.
+    /// an older laptop, so a 35-minute take takes about 3 minutes.
     static func encode(sidecar: URL, sampleRate: Double, notes: String, to output: URL,
                        progress: ((Double) -> Void)? = nil) throws {
         guard let ffmpeg = ffmpegPath else { throw RecordingError.encoderMissing }
-        let partial = output.deletingLastPathComponent()
-            .appendingPathComponent(".\(output.lastPathComponent).part")
+        let partial = partialURL(for: output)
         let seconds = Double(max(0, (PCMSidecar.fileSize(sidecar) ?? 0) - Int64(PCMSidecar.headerSizeV2)))
             / 4 / max(1, sampleRate)
 
         func arguments(reportingProgress: Bool) -> [String] {
             var arguments = ["-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
             if reportingProgress { arguments += ["-nostats", "-progress", "pipe:1"] }
-            arguments += [
+            return arguments + [
                 "-f", "f32le", "-ar", String(Int(sampleRate.rounded())), "-ac", "1",
                 "-skip_initial_bytes", String(PCMSidecar.headerSizeV2),
                 "-i", sidecar.path,
-                "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "1",
-            ]
-            let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedNotes.isEmpty {
-                arguments += ["-metadata", "description=\(trimmedNotes)"]
-            }
-            return arguments + ["-f", "ipod", partial.path]
+            ] + outputArguments(notes: notes, to: partial)
         }
 
         try? FileManager.default.removeItem(at: partial)
@@ -135,45 +148,42 @@ public enum AACEncoder {
         }
         guard run.status == 0, MP4File.isFinished(partial) else {
             try? FileManager.default.removeItem(at: partial)
-            let detail = run.message.split(whereSeparator: \.isNewline).last.map(String.init) ?? "exit \(run.status)"
-            throw RecordingError.encoderFailed(detail)
+            throw RecordingError.encoderFailed(lastLine(of: run.message) ?? "exit \(run.status)")
         }
         try FileManager.default.moveItem(at: partial, to: output)
     }
 
-    /// Runs ffmpeg to the end. Returns its exit status and what it wrote to
-    /// stderr; its stdout carries `-progress` blocks when asked for.
+    /// ffmpeg's last line of complaint, for an error message.
+    static func lastLine(of message: String) -> String? {
+        message.split(whereSeparator: \.isNewline).last.map(String.init)
+    }
+
+    /// Runs ffmpeg to the end, through `ChildProcess` so Windows shows no
+    /// console window. Returns its exit status and what it wrote to stderr;
+    /// its stdout carries `-progress` blocks when asked for.
     private static func runFFmpeg(_ ffmpeg: String, _ arguments: [String], seconds: Double,
                                   progress: ((Double) -> Void)?) throws -> (status: Int32, message: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffmpeg)
-        process.arguments = arguments
-        let errors = Pipe()
-        let report = Pipe()
-        process.standardError = errors
-        process.standardOutput = report
+        let child: ChildProcess
         do {
-            try process.run()
+            child = try ChildProcess(ffmpeg, arguments)
         } catch {
             throw RecordingError.encoderFailed("couldn't start ffmpeg")
         }
+        child.closeInput()  // it reads the sidecar, never stdin
         // stderr is read on its own thread, so neither pipe can fill up and
         // stall ffmpeg while the other is being read.
-        let stderr = PipeDrain(errors)
-        readProgress(report, seconds: seconds, into: progress)
+        let stderr = PipeDrain(child, DE_CHILD_STDERR)
+        readProgress(child, seconds: seconds, into: progress)
         let message = String(decoding: stderr.wait(), as: UTF8.self)
-        process.waitUntilExit()
-        return (process.terminationStatus, message)
+        return (child.wait(), message)
     }
 
-    /// Reads ffmpeg's `-progress` blocks until it closes the pipe, passing on
+    /// Reads ffmpeg's `-progress` blocks until it closes stdout, passing on
     /// `out_time_us` as a fraction of the take's `seconds`.
-    private static func readProgress(_ pipe: Pipe, seconds: Double, into progress: ((Double) -> Void)?) {
+    private static func readProgress(_ child: ChildProcess, seconds: Double, into progress: ((Double) -> Void)?) {
         let key = "out_time_us="
         var pending = Data()
-        while true {
-            let chunk = pipe.fileHandleForReading.availableData
-            if chunk.isEmpty { return }
+        child.read(DE_CHILD_STDOUT) { chunk in
             pending.append(chunk)
             while let newline = pending.firstIndex(of: 0x0A) {
                 let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
@@ -186,30 +196,13 @@ public enum AACEncoder {
     }
 }
 
-/// Reads a pipe to its end on a background thread; `wait()` returns it all.
-private final class PipeDrain {
-    private var data = Data()
-    private let done = DispatchSemaphore(value: 0)
-
-    init(_ pipe: Pipe) {
-        DispatchQueue.global(qos: .utility).async { [self] in
-            data = pipe.fileHandleForReading.readDataToEndOfFile()
-            done.signal()
-        }
-    }
-
-    func wait() -> Data {
-        done.wait()
-        return data
-    }
-}
-
-/// One take's files, written from the engine's pump thread only.
+/// One take's files, written from one thread at a time (`TakeIO`'s queue).
 ///
 /// WAV: the 24-bit WAV and the Float32 sidecar side by side; stopping
-/// finalizes the WAV and deletes the sidecar. AAC: only the sidecar while
-/// recording; stopping encodes the M4A from it, then deletes it. Either way
-/// a failure leaves the sidecar for recovery.
+/// finalizes the WAV and deletes the sidecar. AAC: the sidecar, and the M4A
+/// encoded live from the same stream (`LiveEncoder`); stopping finishes the
+/// M4A, or encodes it from the sidecar if the live encode failed, then
+/// deletes the sidecar. Either way a failure leaves the sidecar for recovery.
 final class TakeWriter {
     let mainURL: URL
     let format: OutputFormat
@@ -220,6 +213,11 @@ final class TakeWriter {
     private(set) var framesWritten: Int64 = 0
     /// The sidecar stopped taking writes (WAV takes carry on without it).
     private(set) var sidecarFailed = false
+    /// An AAC take's encoder, running while it records; nil if ffmpeg
+    /// couldn't start, and the take is then encoded after STOP.
+    private(set) var liveEncoder: LiveEncoder?
+    /// The saved M4A came from the live encoder, not the sidecar.
+    private(set) var savedLive = false
 
     /// Opens the take's files. An AAC take can't run without its sidecar; a
     /// WAV take records without one, flagged so the faceplate can say so.
@@ -231,6 +229,13 @@ final class TakeWriter {
         switch format {
         case .aac:
             sidecar = try PCMSidecar(mainOutput: mainURL, sampleRate: sampleRate)
+            if let ffmpeg = AACEncoder.ffmpegPath {
+                do {
+                    liveEncoder = try LiveEncoder(ffmpeg: ffmpeg, sampleRate: sampleRate, notes: notes, output: mainURL)
+                } catch {
+                    Log.error("The live AAC encoder didn't start (\(error)); the take will be encoded after STOP")
+                }
+            }
         case .wav:
             wav = try WAVWriter(url: mainURL, sampleRate: UInt32(sampleRate.rounded()))
             do {
@@ -257,6 +262,7 @@ final class TakeWriter {
                 Log.error("Sidecar write failed; WAV take continues: \(error)")
             }
         }
+        liveEncoder?.write(samples)
         framesWritten += Int64(samples.count)
     }
 
@@ -273,6 +279,7 @@ final class TakeWriter {
             wav?.abandon()
             try? FileManager.default.removeItem(at: mainURL)
             sidecar?.discard()
+            liveEncoder?.cancel()
             return .nothingWritten
         }
         switch format {
@@ -288,6 +295,19 @@ final class TakeWriter {
         case .aac:
             guard let sidecar else { return .failed(RecordingError.noActiveRecording) }
             sidecar.close()
+            // The live encode: only its last few blocks are left to do.
+            if let liveEncoder, liveEncoder.finish(expectedFrames: framesWritten) {
+                do {
+                    try FileManager.default.moveItem(at: liveEncoder.partial, to: mainURL)
+                    try? FileManager.default.removeItem(at: sidecar.url)
+                    savedLive = true
+                    progress?(1)
+                    return .saved(mainURL)
+                } catch {
+                    try? FileManager.default.removeItem(at: liveEncoder.partial)
+                    Log.error("Couldn't put the live M4A in place (\(error)); encoding from the sidecar")
+                }
+            }
             do {
                 try AACEncoder.encode(sidecar: sidecar.url, sampleRate: sampleRate, notes: notes, to: mainURL,
                                       progress: progress)
@@ -304,5 +324,6 @@ final class TakeWriter {
         wav?.abandon()
         try? FileManager.default.removeItem(at: mainURL)
         sidecar?.discard()
+        liveEncoder?.cancel()
     }
 }
