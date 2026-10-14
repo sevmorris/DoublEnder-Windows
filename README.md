@@ -88,7 +88,7 @@ All are marked `DoublEnder patch`:
 - `CRaylib/external/glfw/src/x11_window.c`: two waits for X server replies now give up on wall-clock time. As shipped, they spin forever when other events are queued and the reply never comes. XWayland under KDE Plasma never sends `VisibilityNotify`, so window creation hung.
 - `CRaylib/external/sdefl.h`: clang, which defines `_MSC_VER` on Windows, takes the `__builtin_clzl` path rather than `_BitScanReverse`, which it rejects without `<intrin.h>`. `sinfl.h` already does the same.
 
-`CRaylib/rglfw.c` also gains `DE_BeginWindowMove` and `DE_GetCursorScreenPosition` (declared in `include/de_window.h`), which reach GLFW's internals for the window drag, and `DE_ShortcutKey`, which finds the key that types a letter in the current keyboard layout.
+`CRaylib/rglfw.c` also gains `DE_BeginWindowMove` and `DE_GetCursorScreenPosition` (declared in `include/de_window.h`), which reach GLFW's internals for the window drag, and `DE_ShortcutKey`, which finds the key that types a letter in the current keyboard layout. `CRaylib/de_blend.c` adds `DE_UseOverBlending`, which the main loop calls each frame: raylib's default blending treats alpha like colour, so anything translucent drawn over the screen (its vignette, a dialog's dimming) left that part of the transparent window partly see-through on Windows. It blends alpha as "over" instead, so only the corners show the desktop.
 
 The app also recovers from a session-wide `__GLX_VENDOR_LIBRARY_NAME=nvidia` (set by optimus-manager and some PRIME setups). When that GPU isn't usable, no OpenGL context can be created, so the app restarts itself once without the variable.
 
@@ -105,7 +105,7 @@ The app logs to `%LOCALAPPDATA%\DoublEnder\DoublEnder.log` or `~/.local/state/Do
 
 ## Known gaps
 
-- Windows has not been run. Check first: capture through WASAPI, the microphone privacy switch (it should show the "Microphone access is turned off" error), the Desktop path under OneDrive, high-DPI scaling, and the transparent window corners.
+- Windows has been run on one Windows 10 laptop with a USB microphone, which records through WASAPI. Still to check: the microphone privacy switch (it should show the "Microphone access is turned off" error), the Desktop path under OneDrive, high-DPI scaling, and that only the window's corners are transparent.
 - On Windows, ffmpeg is started through Foundation's `Process`, which doesn't pass `CREATE_NO_WINDOW`. A console window will probably flash while an AAC take is encoded. Encoding through Media Foundation would fix that and remove the need to ship ffmpeg.
 - Linux runs under X11, or XWayland on Wayland desktops. Native Wayland would need GLFW's generated protocol sources.
 - Releases are unsigned. Windows SmartScreen will warn on first run until the exe is code-signed.

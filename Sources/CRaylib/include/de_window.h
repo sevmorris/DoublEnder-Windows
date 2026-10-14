@@ -1,4 +1,5 @@
-// DoublEnder additions to raylib's desktop platform (see the end of rglfw.c).
+// DoublEnder additions to raylib's desktop platform (see the end of rglfw.c,
+// and de_blend.c).
 #ifndef DE_WINDOW_H
 #define DE_WINDOW_H
 
@@ -15,5 +16,10 @@ int DE_BeginWindowMove(void);
 // keyboard layout, for Ctrl shortcuts; the US position if no key types it.
 // Returns 0 for anything but a letter.
 int DE_ShortcutKey(int letter);
+
+// Alpha blending for a transparent window: colour as raylib's default, alpha
+// as "over", so opaque pixels stay opaque (see de_blend.c). Call after
+// BeginDrawing; it costs nothing once set.
+void DE_UseOverBlending(void);
 
 #endif

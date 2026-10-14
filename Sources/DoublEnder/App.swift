@@ -72,6 +72,9 @@ final class App {
             if controller.isCurrentlyRecording || controller.isStopping { faceplate.popover = nil }
 
             BeginDrawing()
+            // Keeps opaque pixels opaque in the transparent window, so the
+            // desktop shows only through the corners (see de_blend.c).
+            DE_UseOverBlending()
             ClearBackground(isTransparent ? Theme.clear : Theme.rgb(0x2B2B2B))
             let time = GetTime()
             faceplate.draw(time: time)
