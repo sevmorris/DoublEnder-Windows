@@ -96,4 +96,14 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: DoublEnder-windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            !dist/*-symbols.zip
+
+      # DoublEnder.pdb for this exact build, never shipped to guests: what a
+      # crash or hang dump from it needs to be read down to function names.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: DoublEnder-windows-symbols
+          path: dist/*-symbols.zip
+          if-no-files-found: error

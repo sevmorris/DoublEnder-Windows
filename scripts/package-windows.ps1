@@ -14,9 +14,17 @@ $version = (Select-String -Path Sources\DoublEnderCore\VersionFormatting.swift `
 $name = "DoublEnder-$version-windows-x64"
 $out = "dist\$name"
 
-swift build -c release
+# A release build with CodeView debug info, so the linker writes
+# DoublEnder.pdb beside the exe. The exe only records the PDB's name and
+# GUID; the PDB stays out of the guests' zip and goes in its own
+# symbols zip, with which a crash or hang dump from this exact build can
+# be read down to function names (a dump without it shows only offsets).
+$debugInfo = @('-Xswiftc', '-g', '-Xswiftc', '-debug-info-format=codeview', '-Xcc', '-g', '-Xlinker', '-debug')
+swift build -c release @debugInfo
 if ($LASTEXITCODE -ne 0) { throw "swift build failed" }
-$bin = (swift build -c release --show-bin-path).Trim()
+$bin = (swift build -c release @debugInfo --show-bin-path).Trim()
+$pdb = Join-Path $bin 'DoublEnder.pdb'
+if (-not (Test-Path $pdb)) { throw "DoublEnder.pdb wasn't written: a dump from this build couldn't be read" }
 
 Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$out\licenses" | Out-Null
@@ -59,4 +67,14 @@ if ($Ffmpeg) {
 }
 
 Compress-Archive -Force -Path $out -DestinationPath "dist\$name.zip"
+
+# The symbols, kept with the build they belong to. WinDbg matches the PDB
+# to the exe by the GUID the linker recorded, and looks for it by its own
+# name, so it stays DoublEnder.pdb inside the versioned zip.
+$symbols = "dist\$name-symbols"
+Remove-Item -Recurse -Force $symbols -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $symbols | Out-Null
+Copy-Item $pdb $symbols
+Compress-Archive -Force -Path "$symbols\DoublEnder.pdb" -DestinationPath "dist\$name-symbols.zip"
+Write-Host "dist\$name-symbols.zip"
 Write-Host "dist\$name.zip"
