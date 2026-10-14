@@ -47,7 +47,7 @@ The zip contains `DoublEnder.exe`, `Resources\`, the Swift runtime DLLs, the Vis
 
 ## Releases
 
-Windows and Linux builds are published on this repository's Releases page, never on the Mac app's. The Mac app's update checker and its download links read `sevmorris/DoublEnder`'s latest release, and its `release.sh` prunes every `v…` release there, so a Windows release in that repository would be offered to every Mac and then deleted by the next Mac release. There is no release workflow yet: until there is, CI's artifacts are the builds.
+Windows and Linux builds are published on this repository's Releases page, never on the Mac app's. The Mac app's update checker and its download links read `sevmorris/DoublEnder`'s latest release, and its `release.sh` prunes every `v…` release there, so a Windows release in that repository would be offered to every Mac and then deleted by the next Mac release. There is no release workflow yet: until there is, CI's artifacts are the builds. Each release should keep the build's symbols zip (below) beside it, since a dump from that build can only be read with them.
 
 ## Layout
 
@@ -108,6 +108,8 @@ For development, `--recordings-dir DIR` saves takes somewhere other than the Des
 The app logs to `%LOCALAPPDATA%\DoublEnder\DoublEnder.log` or `~/.local/state/DoublEnder/DoublEnder.log` (`$XDG_STATE_HOME`), moved aside to `DoublEnder.previous.log` once it passes 1 MB: the file to ask a guest for when something went wrong. It holds errors and device names, never audio or notes. A Windows release build logs only there; elsewhere the log also goes to stderr.
 
 If no OpenGL 3.3 window can be opened, the app says so in a system dialog rather than exiting silently: a message box on Windows, zenity or kdialog on Linux.
+
+Every Windows build is made with debug information, and `package-windows.ps1` puts its `DoublEnder.pdb` in `dist\DoublEnder-<version>-windows-x64-symbols.zip`, never in the guests' zip; CI uploads it as the `DoublEnder-windows-symbols` artifact. With it, a crash or hang dump from that exact build reads down to function names: in WinDbg, `.sympath+ <folder with DoublEnder.pdb>` then `.reload`. A PDB from any other build doesn't match, so keep each one with its build.
 
 ## Known gaps
 
