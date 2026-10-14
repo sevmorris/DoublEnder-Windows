@@ -4,19 +4,22 @@ import Foundation
 /// wording follow the Mac build's `DiskSpaceChecker`.
 public enum DiskSpaceChecker {
 
-    /// AAC is encoded from the Float32 crash-recovery stream when the take
-    /// stops, so an AAC take also needs ~11.5 MB/min while it records; at
-    /// 50 MB that is still minutes of warning before the disk watch stops it.
+    /// An AAC take writes the Float32 crash-recovery stream beside its M4A,
+    /// so it needs ~11.5 MB/min while it records; at 50 MB that is still
+    /// minutes of warning before the disk watch stops it.
     private static let minimumFreeBytesAAC: Int64 = 50 * 1024 * 1024
     /// WAV writes the 24-bit file and the Float32 sidecar side by side.
     private static let minimumFreeBytesWAV: Int64 = 200 * 1024 * 1024
-    /// What ffmpeg writes per recorded second when an AAC take stops:
-    /// 256 kbps, plus 5% for the container.
+    /// What ffmpeg writes per recorded second of AAC: 256 kbps, plus 5%
+    /// for the container.
     static let encodedAACBytesPerSecond: Double = 256_000 / 8 * 1.05
 
     /// The free space a take needs to keep going. An AAC take must also
-    /// leave room for its M4A, which is written only when it stops, so its
-    /// floor rises with `recordedSeconds`; a WAV is finished in place.
+    /// leave room for its whole M4A, so its floor rises with
+    /// `recordedSeconds`: the live encode writes it as the take records, but
+    /// if that fails it is encoded again from the sidecar after STOP. While
+    /// the live encode runs, its file is counted twice, on the safe side. A
+    /// WAV is finished in place.
     public static func minimumFreeBytes(for format: OutputFormat, recordedSeconds: Double = 0) -> Int64 {
         switch format {
         case .aac: return minimumFreeBytesAAC + Int64(max(0, recordedSeconds) * encodedAACBytesPerSecond)

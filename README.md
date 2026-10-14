@@ -55,22 +55,22 @@ Windows and Linux builds are published on this repository's Releases page, never
 |---|---|
 | `CMiniaudio` | [miniaudio](https://miniaud.io) 0.11.25 and `de_audio.c`, a small capture layer. The real-time callback copies native-format frames into a lock-free ring buffer and never enters Swift. `de_audio_win.c` finds which bus (USB, Bluetooth) a Windows input is on. |
 | `CRaylib` | [raylib](https://www.raylib.com) 5.5 with its bundled GLFW, for the window and drawing, and DoublEnder's additions to it (see below). |
-| `CPlatform` | `de_platform.c`: the single-instance lock, and on Windows a message box and bringing a window forward. |
-| `DoublEnderCore` | Everything except drawing: `AudioEngine` (devices, the pump thread, watchdogs), `TakeIO` (the take's disk writes, off the pump), `TakeWriter` (24-bit WAV, the sidecar, AAC), `PCMSidecar`, `CrashRecovery`, `InstanceLock`, `Log`, and `RecorderController`, which ports `RecorderViewModel`. |
+| `CPlatform` | `de_platform.c`: the single-instance lock, and on Windows a message box and bringing a window forward. `de_child.c`: starting ffmpeg on pipes, with no console window on Windows. |
+| `DoublEnderCore` | Everything except drawing: `AudioEngine` (devices, the pump thread, watchdogs), `TakeIO` (the take's disk writes, off the pump), `TakeWriter` (24-bit WAV, the sidecar, AAC), `LiveEncoder` (AAC as it records), `PCMSidecar`, `CrashRecovery`, `InstanceLock`, `Log`, and `RecorderController`, which ports `RecorderViewModel`. |
 | `DoublEnder` | The faceplate UI and main loop, plus command-line diagnostics. |
 
 Names, messages and behaviour follow the Mac app's [Theory of Operation](https://github.com/sevmorris/DoublEnder/blob/main/docs/THEORY_OF_OPERATION.md) wherever the platforms allow:
 
 - The four watchdogs: first buffer (5 s), data flow (3 s), the 1-second input-health poll, and dropped audio.
 - The disconnect latch: the first failure path wins.
-- The disk checks: fail closed at 200 MB (WAV) or, for AAC, at 50 MB plus room for the M4A that ffmpeg writes when the take stops (about 2 MB per recorded minute), polled every 5 s while recording.
+- The disk checks: fail closed at 200 MB (WAV) or, for AAC, at 50 MB plus room for the whole M4A (about 2 MB per recorded minute), in case it has to be encoded again from the sidecar after STOP, polled every 5 s while recording.
 - The mono mix: the Mac's measured AVAssetWriter weights, applied to miniaudio's channel map.
 - The DEP2 sidecar and launch-time crash recovery, with the same dialogs and the same 8 KB rule. The sidecar is synced every 2.5 s rather than every 512 KB (§3's ~2.7 s at 48 kHz): by time, so a slow sync never limits how fast a backlog is written.
 - Capture never waits on the disk, as on the Mac: the pump hands each block to `TakeIO`, which writes the WAV and the sidecar in order on its own queue, holding a slow disk's backlog in memory. The port first wrote on the pump, and on an older Windows laptop the sidecar's syncs held it up long enough to overflow the 10 s ring and fail the take with "Audio was dropped". The log has a line per take: the input format, dropped frames, the longest wait between ring reads, the slowest write and sync, and the largest backlog.
 
 ## Differences from the Mac app
 
-- **AAC needs ffmpeg.** Linux and Windows have no built-in AAC encoder Swift can call. An AAC take records only to the Float32 sidecar while it runs. When it stops, ffmpeg encodes 256 kbps mono at 48 kHz, with the notes in the description tag, into a temporary file that is renamed into place. A take is therefore crash-safe from its first sample. If encoding fails, the sidecar is recovered to a WAV on the spot. Without ffmpeg (next to the app or on `PATH`), the format picker offers WAV only. The Windows zip carries its own minimal build (see Building); Linux uses the system's.
+- **AAC needs ffmpeg.** Linux and Windows have no built-in AAC encoder Swift can call. ffmpeg encodes an AAC take while it records, as AVAssetWriter does on the Mac: 256 kbps mono at 48 kHz, with the notes in the description tag, into a temporary file that is renamed into place when the take stops, so STOP waits only for its last few blocks. The Float32 sidecar is written beside it, so a take is crash-safe from its first sample. If ffmpeg won't start, stops reading, or leaves an unfinished file, the take is encoded from the sidecar after STOP instead, with "SAVING… N%" on the faceplate (about 3 minutes for a 35-minute take on an older laptop). If that fails too, the sidecar is recovered to a WAV on the spot. The log's line for each take says which way it was saved. Without ffmpeg (next to the app or on `PATH`), the format picker offers WAV only. The Windows zip carries its own minimal build (see Building); Linux uses the system's.
 - **WAV** is written as on the Mac: 24-bit mono at the device's native rate. The header sizes stay at zero until the take finishes, so a crashed WAV reads as empty and recovery uses the sidecar.
 - **Popovers and dialogs** are drawn inside the window, because raylib can't open the Mac's floating panels.
 - **Window controls:** the borderless window has small minimise and close buttons in the plate's top-right corner. Ctrl+Q / Ctrl+W quit through the same "Recording in progress" prompt as ⌘Q, and Ctrl+M minimises. Shortcuts follow the key's label in the current layout, so Ctrl+A on a French keyboard doesn't quit.
@@ -112,6 +112,6 @@ If no OpenGL 3.3 window can be opened, the app says so in a system dialog rather
 ## Known gaps
 
 - Windows has been run on one Windows 10 laptop with a USB microphone, which records through WASAPI. Still to check: the microphone privacy switch (it should show the "Microphone access is turned off" error), Bluetooth earbuds (not offered as a new microphone), a second launch (it should bring the first window forward), the Desktop path under OneDrive, high-DPI scaling, and that only the window's corners are transparent.
-- On Windows, ffmpeg is started through Foundation's `Process`, which doesn't pass `CREATE_NO_WINDOW`, so a console window probably flashes while an AAC take is encoded. Starting ffmpeg with `CreateProcessW` and that flag would hide it. Media Foundation's AAC encoder would do without ffmpeg, but it tops out at 192 kbps (and takes 16-bit input), below the Mac's 256 kbps.
+- AAC on Windows still needs ffmpeg. Media Foundation's AAC encoder would do without it, but it tops out at 192 kbps (and takes 16-bit input), below the Mac's 256 kbps.
 - Linux runs under X11, or XWayland on Wayland desktops. Native Wayland would need GLFW's generated protocol sources.
 - Releases are unsigned. Windows SmartScreen will warn on first run until the exe is code-signed.

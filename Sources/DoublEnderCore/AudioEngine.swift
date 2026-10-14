@@ -591,7 +591,11 @@ public final class AudioEngine {
         let rate = format?.sampleRate ?? 48_000
         let io = take.ioSummary
         let sidecar = take.sink.sidecar.map { "\($0.syncCount) syncs, slowest \(ms($0.longestSync))" } ?? "no sidecar"
-        return "Take \(outcome): \(String(format: "%.1f", seconds)) s, \(take.sink.format.rawValue), \(input); "
+        var output = take.sink.format.rawValue
+        if take.sink.format == .aac, case .success(.some) = result {
+            output += take.sink.savedLive ? " (encoded live)" : " (encoded after STOP)"
+        }
+        return "Take \(outcome): \(String(format: "%.1f", seconds)) s, \(output), \(input); "
             + "dropped \(dropped) frames; longest wait between ring reads \(ms(take.longestDrainGap)); "
             + "slowest write \(ms(io.longestWrite)), largest backlog \(ms(Double(io.largestBacklogFrames) / rate)); "
             + "sidecar \(sidecar)"
