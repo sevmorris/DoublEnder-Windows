@@ -45,6 +45,10 @@ let package = Package(
             exclude: ["external", "platforms"],
             publicHeadersPath: "include",
             cSettings: [
+                // The bundled GLFW's own header, for platforms/rcore_desktop_glfw.c's
+                // #include "GLFW/glfw3.h". Without it a system GLFW (Arch's glfw
+                // package, say) could stand in silently, and elsewhere it's missing.
+                .headerSearchPath("external/glfw/include"),
                 .define("PLATFORM_DESKTOP_GLFW"),
                 .define("GRAPHICS_API_OPENGL_33"),
                 .define("_GNU_SOURCE", .when(platforms: [.linux])),

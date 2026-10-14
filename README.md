@@ -85,6 +85,7 @@ All are marked `DoublEnder patch`:
 - `CRaylib/config.h`: raudio is off (miniaudio is used directly), and so are F12 screenshots and Ctrl+F12 GIF capture.
 - `CRaylib/rcore.c`, `platforms/rcore_desktop_glfw.c`: a failed window creation returns instead of crashing, so the app can retry with fewer features. Some GLX setups have no framebuffer that is both transparent and multisampled.
 - `CRaylib/external/glfw/src/x11_window.c`: two waits for X server replies now give up on wall-clock time. As shipped, they spin forever when other events are queued and the reply never comes. XWayland under KDE Plasma never sends `VisibilityNotify`, so window creation hung.
+- `CRaylib/external/sdefl.h`: clang, which defines `_MSC_VER` on Windows, takes the `__builtin_clzl` path rather than `_BitScanReverse`, which it rejects without `<intrin.h>`. `sinfl.h` already does the same.
 
 `CRaylib/rglfw.c` also gains `DE_BeginWindowMove` and `DE_GetCursorScreenPosition` (declared in `include/de_window.h`), which reach GLFW's internals for the window drag, and `DE_ShortcutKey`, which finds the key that types a letter in the current keyboard layout.
 
