@@ -61,7 +61,8 @@ Names, messages and behaviour follow `../docs/THEORY_OF_OPERATION.md` wherever t
 - The disconnect latch: the first failure path wins.
 - The disk checks: fail closed at 50 MB (AAC) or 200 MB (WAV), polled every 5 s while recording.
 - The mono mix: the Mac's measured AVAssetWriter weights, applied to miniaudio's channel map.
-- The DEP2 sidecar, synced every 512 KB, and launch-time crash recovery with the same dialogs and the same 8 KB rule.
+- The DEP2 sidecar and launch-time crash recovery, with the same dialogs and the same 8 KB rule. The sidecar is synced every 2.5 s rather than every 512 KB (§3's ~2.7 s at 48 kHz): by time, so a slow sync never limits how fast a backlog is written.
+- Capture never waits on the disk, as on the Mac: the pump hands each block to `TakeIO`, which writes the WAV and the sidecar in order on its own queue, holding a slow disk's backlog in memory. The port first wrote on the pump, and on an older Windows laptop the sidecar's syncs held it up long enough to overflow the 10 s ring and fail the take with "Audio was dropped". The log has a line per take: the input format, dropped frames, the longest wait between ring reads, the slowest write and sync, and the largest backlog.
 
 ## Differences from the Mac app
 

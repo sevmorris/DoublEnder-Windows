@@ -32,6 +32,20 @@ de_context* de_context_create(void)
     return c;
 }
 
+de_context* de_context_create_null(void)
+{
+    ma_backend backend = ma_backend_null;
+    de_context* c = (de_context*)calloc(1, sizeof(*c));
+    if (c == NULL) {
+        return NULL;
+    }
+    if (ma_context_init(&backend, 1, NULL, &c->ctx) != MA_SUCCESS) {
+        free(c);
+        return NULL;
+    }
+    return c;
+}
+
 void de_context_destroy(de_context* ctx)
 {
     if (ctx == NULL) {

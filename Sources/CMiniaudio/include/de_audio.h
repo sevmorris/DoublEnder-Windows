@@ -34,6 +34,9 @@ typedef struct de_context de_context;
 
 /* NULL when no audio backend could be initialised. */
 de_context* de_context_create(void);
+/* miniaudio's null backend only: one capture device that delivers silence at
+   real time, with no hardware or permission needed. For tests. */
+de_context* de_context_create_null(void);
 void de_context_destroy(de_context* ctx);
 /* "PulseAudio", "WASAPI", "ALSA", ... */
 const char* de_context_backend_name(const de_context* ctx);

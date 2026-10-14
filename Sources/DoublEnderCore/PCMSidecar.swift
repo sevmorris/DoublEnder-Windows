@@ -26,13 +26,20 @@ public final class PCMSidecar {
     static let headerSizeV1 = 16
     public static let headerSizeV2 = 20
     static let payloadFormatFloat32: UInt32 = 1
-    /// Flush every 512 KB: ~2.7 s at 48 kHz, so a power loss loses at most that.
-    static let syncIntervalBytes = 512 * 1024
+    /// Flush at most this often, so a power loss loses about that much. The
+    /// Mac flushes every 512 KB (~2.7 s at 48 kHz); a time interval instead
+    /// keeps a slow flush from capping how fast a backlog can be written,
+    /// since a writer catching up writes a lot between flushes.
+    static let defaultSyncInterval: Double = 2.5
 
     public let url: URL
     public let sampleRate: Double
     private let handle: FileHandle
-    private var bytesSinceSync = 0
+    var syncInterval = PCMSidecar.defaultSyncInterval
+    private var lastSyncAt: Double
+    /// Flushes so far and the slowest, for the take's log line.
+    public private(set) var syncCount = 0
+    public private(set) var longestSync: Double = 0
     public private(set) var payloadBytes: Int64 = 0
 
     public static func url(for mainOutput: URL) -> URL {
@@ -69,18 +76,22 @@ public final class PCMSidecar {
         }
         self.url = url
         self.sampleRate = sampleRate
+        lastSyncAt = Platform.now()
     }
 
-    /// Appends mono samples. Called from the engine's pump thread only.
+    /// Appends mono samples, from one thread at a time: the take's I/O
+    /// queue (`TakeIO`).
     public func append(_ samples: UnsafeBufferPointer<Float>) throws {
         guard samples.count > 0 else { return }
         let data = Data(buffer: samples)
         try handle.write(contentsOf: data)
         payloadBytes += Int64(data.count)
-        bytesSinceSync += data.count
-        if bytesSinceSync >= Self.syncIntervalBytes {
+        let now = Platform.now()
+        if now - lastSyncAt >= syncInterval {
             try handle.synchronize()
-            bytesSinceSync = 0
+            lastSyncAt = Platform.now()
+            syncCount += 1
+            longestSync = max(longestSync, lastSyncAt - now)
         }
     }
 

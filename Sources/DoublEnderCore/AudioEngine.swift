@@ -79,7 +79,9 @@ public typealias StopResult = Result<URL?, Error>
 ///   - miniaudio's real-time thread copies native frames into a ring buffer
 ///     (de_audio.c) and nothing else;
 ///   - the pump thread drains the ring, mixes to mono, drives the meter,
-///     writes the take and runs the watchdogs;
+///     hands the take's audio to `TakeIO` and runs the watchdogs; it never
+///     waits on the disk;
+///   - `ioQueue` writes the take's files, in order (`TakeIO`);
 ///   - `deviceQueue` opens and closes devices and enumerates them, which
 ///     can block for a moment on some backends;
 ///   - everything public is called on the main loop, and callbacks arrive
@@ -113,12 +115,11 @@ public final class AudioEngine {
     private let lock = NSLock()
     private var capture: OpaquePointer?
     private var format: CaptureFormat?
-    private var take: TakeWriter?
+    private var take: TakeIO<TakeWriter>?
     private var takeStartedAt: Double = 0
     private var pendingEnd: (cancel: Bool, completion: (StopResult) -> Void)?
     private var meterDB: Float = LevelMeter.dbFloor
     private var lastDataAt: Double = 0
-    private var lastWriteAt: Double = 0
     private var captureOpenedAt: Double = 0
     private var droppedAtTakeStart: UInt64 = 0
     private var droppedFrameWarningFlag = false
@@ -132,6 +133,7 @@ public final class AudioEngine {
     private let context: OpaquePointer?
     private let deviceQueue = DispatchQueue(label: "DoublEnder.devices")
     private let finishQueue = DispatchQueue(label: "DoublEnder.finish", qos: .userInitiated)
+    private let ioQueue = DispatchQueue(label: "DoublEnder.io", qos: .userInitiated)
     private var pump: Thread?
     private var knownUIDs: Set<String>?
     /// Controller IDs by device uid; `deviceQueue` only.
@@ -143,8 +145,15 @@ public final class AudioEngine {
     /// A take fails once this much audio has been dropped in total.
     static let droppedFailureSeconds: Double = 1
 
-    public init() {
-        context = de_context_create()
+    public convenience init() {
+        self.init(nullBackend: false)
+    }
+
+    /// `nullBackend`: miniaudio's null backend, whose one input delivers
+    /// silence at real time. Tests record through the whole engine with it,
+    /// on any machine.
+    init(nullBackend: Bool) {
+        context = nullBackend ? de_context_create_null() : de_context_create()
         backendName = context.map { String(cString: de_context_backend_name($0)) } ?? "none"
         let thread = Thread { [weak self] in self?.pumpLoop() }
         thread.name = "DoublEnder.pump"
@@ -174,7 +183,14 @@ public final class AudioEngine {
 
     /// Audio reached the file within the last 150 ms.
     public var isWritingData: Bool {
-        locked { take != nil && Platform.now() - lastWriteAt < 0.15 }
+        guard let take = locked({ take }) else { return false }
+        return Platform.now() - take.lastWrite < 0.15
+    }
+
+    /// Seconds of the take captured but not yet on disk: a slow disk.
+    public var writeBacklogSeconds: Double {
+        guard let take = locked({ take }), let rate = currentFormat?.sampleRate, rate > 0 else { return 0 }
+        return Double(take.backlogFrames) / rate
     }
 
     public var isRecordingActive: Bool { locked { take != nil } }
@@ -318,6 +334,7 @@ public final class AudioEngine {
                 self.idleStopNoticed = false
                 self.lock.unlock()
                 de_capture_close(old)
+                Log.info("Input: \(device?.name ?? "the system default"), \(Int(format.sampleRate)) Hz, \(format.channels) ch, \(format.sampleFormat.diagnosticName) (\(self.backendName))")
                 MainQueue.post {
                     self.isRebuilding = false
                     self.engineHealthy = true
@@ -384,9 +401,8 @@ public final class AudioEngine {
         let writer = try TakeWriter(mainURL: url, format: outputFormat, notes: notes,
                                     sampleRate: format.sampleRate)
         lock.lock()
-        take = writer
+        take = TakeIO(sink: writer, queue: ioQueue)
         takeStartedAt = Platform.now()
-        lastWriteAt = 0
         droppedAtTakeStart = capture.map { de_capture_frames_dropped($0) } ?? 0
         droppedFrameWarningFlag = false
         sidecarFailedFlag = false
@@ -396,9 +412,9 @@ public final class AudioEngine {
         lock.unlock()
     }
 
-    /// Finishes the take: the pump drains what is buffered, then the files
-    /// are finalized off the pump (AAC encodes). `completion` runs on the
-    /// main loop.
+    /// Finishes the take: the pump drains what is buffered, the I/O queue
+    /// writes what it was handed, then the files are finalized off the pump
+    /// (AAC encodes). `completion` runs on the main loop.
     public func stopRecording(completion: @escaping (StopResult) -> Void) {
         endTake(cancel: false, completion: completion)
     }
@@ -433,6 +449,7 @@ public final class AudioEngine {
         var meterBlockPeak: Float = 0
         var meterBlockFrames = 0
         var smoothed = LevelMeter.dbFloor
+        var lastReadAt = Platform.now()
 
         while true {
             lock.lock()
@@ -452,6 +469,10 @@ public final class AudioEngine {
             lock.unlock()
 
             let now = Platform.now()
+            if cap != nil {
+                activeTake?.noteDrain(gap: now - lastReadAt)
+                lastReadAt = now
+            }
             if bytes > 0, let format {
                 let frames = raw.withUnsafeBytes { rawBuf in
                     mono.withUnsafeMutableBufferPointer { out in
@@ -473,23 +494,20 @@ public final class AudioEngine {
                         meterBlockFrames = 0
                     }
                 }
-                var writeError: Error?
-                if let activeTake {
-                    do {
-                        try mono.withUnsafeBufferPointer { buf in
-                            try activeTake.write(UnsafeBufferPointer(rebasing: buf[0..<frames]))
-                        }
-                    } catch {
-                        writeError = error
-                    }
+                // Handed over, not written: the disk never holds up the ring.
+                mono.withUnsafeBufferPointer { buf in
+                    activeTake?.enqueue(UnsafeBufferPointer(rebasing: buf[0..<frames]))
                 }
                 lock.lock()
                 meterDB = smoothed
                 lastDataAt = now
-                if activeTake != nil, writeError == nil { lastWriteAt = now }
-                if let activeTake, activeTake.sidecarFailed { sidecarFailedFlag = true }
                 lock.unlock()
-                if let writeError {
+            }
+            if let activeTake {
+                if activeTake.sidecarFailed {
+                    lock.lock(); sidecarFailedFlag = true; lock.unlock()
+                }
+                if let writeError = activeTake.error {
                     triggerCaptureFailure(.recordingFailed("Writing the recording failed (\(writeError.localizedDescription))"))
                 }
             }
@@ -518,39 +536,70 @@ public final class AudioEngine {
         }
     }
 
-    private func finishTake(_ activeTake: TakeWriter, end: (cancel: Bool, completion: (StopResult) -> Void)) {
+    private func finishTake(_ activeTake: TakeIO<TakeWriter>, end: (cancel: Bool, completion: (StopResult) -> Void)) {
         lock.lock()
         take = nil
         pendingEnd = nil
         disconnectStopPending = false
+        // At the stop: an AAC take's encode, below, isn't recording time.
+        let seconds = Platform.now() - takeStartedAt
+        let dropped = capture.map { de_capture_frames_dropped($0) &- droppedAtTakeStart } ?? 0
+        let format = self.format
         lock.unlock()
         finishQueue.async {
+            // Everything the pump handed over reaches the files first.
+            activeTake.drain()
+            let writer = activeTake.sink
             let result: StopResult
             if end.cancel {
-                activeTake.cancel()
+                writer.cancel()
                 result = .success(nil)
             } else {
-                switch activeTake.finish() {
+                switch writer.finish() {
                 case .saved(let url): result = .success(url)
                 case .nothingWritten: result = .success(nil)
                 case .failed(let error): result = .failure(error)
                 }
             }
+            Log.info(Self.takeReport(activeTake, result: result, cancelled: end.cancel, format: format,
+                                     seconds: seconds, dropped: dropped))
             MainQueue.post { end.completion(result) }
         }
     }
 
-    private func runWatchdogs(take: TakeWriter, now: Double, notifications: UInt32, dropped: UInt64) {
+    /// One line per take, so a guest's log says what the input delivered and
+    /// whether anything held the capture or the disk up.
+    static func takeReport(_ take: TakeIO<TakeWriter>, result: StopResult, cancelled: Bool,
+                           format: CaptureFormat?, seconds: Double, dropped: UInt64) -> String {
+        let outcome: String
+        switch result {
+        case .success(.some): outcome = "saved"
+        case .success(.none): outcome = cancelled ? "discarded" : "nothing recorded"
+        case .failure(let error): outcome = "failed (\(error.localizedDescription))"
+        }
+        let input = format.map { "\(Int($0.sampleRate)) Hz \($0.channels) ch \($0.sampleFormat.diagnosticName)" } ?? "no input"
+        let rate = format?.sampleRate ?? 48_000
+        let io = take.ioSummary
+        let sidecar = take.sink.sidecar.map { "\($0.syncCount) syncs, slowest \(ms($0.longestSync))" } ?? "no sidecar"
+        return "Take \(outcome): \(String(format: "%.1f", seconds)) s, \(take.sink.format.rawValue), \(input); "
+            + "dropped \(dropped) frames; longest wait between ring reads \(ms(take.longestDrainGap)); "
+            + "slowest write \(ms(io.longestWrite)), largest backlog \(ms(Double(io.largestBacklogFrames) / rate)); "
+            + "sidecar \(sidecar)"
+    }
+
+    private static func ms(_ seconds: Double) -> String { "\(Int((seconds * 1000).rounded())) ms" }
+
+    private func runWatchdogs(take: TakeIO<TakeWriter>, now: Double, notifications: UInt32, dropped: UInt64) {
         let (startedAt, lastData, droppedAtStart, sampleRate) = locked {
             (takeStartedAt, lastDataAt, droppedAtTakeStart, format?.sampleRate ?? 48_000)
         }
-        // Watchdog 4: armed at record start, met by the first written sample.
-        if take.framesWritten == 0, now - startedAt > Self.firstBufferTimeout {
+        // Watchdog 4: armed at record start, met by the first captured sample.
+        if take.framesEnqueued == 0, now - startedAt > Self.firstBufferTimeout {
             triggerCaptureFailure(.inputLost("The microphone delivered no audio"))
             return
         }
         // Watchdog 2: data stopped arriving mid-take.
-        if take.framesWritten > 0, now - lastData > Self.dataFlowTimeout {
+        if take.framesEnqueued > 0, now - lastData > Self.dataFlowTimeout {
             triggerCaptureFailure(.inputLost("The microphone stopped delivering audio"))
             return
         }

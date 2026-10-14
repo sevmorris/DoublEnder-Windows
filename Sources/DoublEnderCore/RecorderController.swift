@@ -165,6 +165,8 @@ public final class RecorderController {
         if isCurrentlyRecording && engine.sidecarUnavailable { return "No crash recovery" }
         if isCurrentlyRecording && engine.sidecarFailedDuringRecording { return "Crash backup unavailable" }
         if isCurrentlyRecording && engine.droppedFrameWarning { return "Dropped frames — check disk" }
+        // The take is safe in memory and still recording; the disk is behind.
+        if isCurrentlyRecording && engine.writeBacklogSeconds > 5 { return "Disk is slow — still recording" }
         return nil
     }
 
