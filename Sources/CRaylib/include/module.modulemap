@@ -1,0 +1,5 @@
+module CRaylib {
+    header "raylib.h"
+    header "de_window.h"
+    export *
+}
