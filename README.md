@@ -1,11 +1,11 @@
 # DoublEnder for Windows and Linux
 
-The DoublEnder Local recorder, rebuilt as a Swift package that runs on Windows and Linux. It has the same faceplate and one-button flow as the Mac app. Its crash-recovery sidecar uses the same file format, so a `.pcmrec` file can be recovered on any of the three systems. The Mac app in `../DoublEnder` is untouched; this folder builds on its own, and its packages take the repository's `LICENSE`.
+The DoublEnder Local recorder, rebuilt as a Swift package that runs on Windows and Linux. It has the same faceplate and one-button flow as the Mac app. Its crash-recovery sidecar uses the same file format, so a `.pcmrec` file can be recovered on any of the three systems. The Mac app lives in [sevmorris/DoublEnder](https://github.com/sevmorris/DoublEnder); this repository holds only the port.
 
 | | Status |
 |---|---|
 | Linux | Built and tested on Arch Linux (KDE Plasma on Wayland, PipeWire, AMD graphics): records WAV and AAC, crash recovery, UI. CI builds, tests and packages it on Ubuntu 24.04. |
-| Windows | Records on a Windows 10 laptop with a USB microphone, after two fixes from its first run there: capture no longer waits on the disk, and only the window's corners are transparent. CI (`.github/workflows/cross-platform.yml`) builds, tests and packages it on Windows Server 2025. Still to check by hand: see Known gaps. |
+| Windows | Records on a Windows 10 laptop with a USB microphone, after two fixes from its first run there: capture no longer waits on the disk, and only the window's corners are transparent. CI (`.github/workflows/ci.yml`) builds, tests and packages it on Windows Server 2025. Still to check by hand: see Known gaps. |
 
 ## Building
 
@@ -45,6 +45,10 @@ The zip contains `DoublEnder.exe`, `Resources\`, the Swift runtime DLLs, the Vis
 
 `ffmpeg.exe` comes from `scripts/build-ffmpeg-windows.sh`, never from `PATH`: a 5 MB LGPL build of the FFmpeg source pinned in `Vendor/ffmpeg-manifest.env`, with only what the AAC encode needs. It cross-compiles with mingw-w64 and nasm (apt on Ubuntu or WSL, Homebrew on a Mac) into `build/ffmpeg-windows`, along with `ffmpeg-LICENSE.txt` and `ffmpeg-SOURCE.txt`, which the package script requires beside it. The same toolchain rebuilds it byte for byte. CI builds it (cached until the recipe or the pin changes), runs the AAC test through it on Windows, and packages it. `--native` builds the same components for the machine you're on, to try a change to the encode command.
 
+## Releases
+
+Windows and Linux builds are published on this repository's Releases page, never on the Mac app's. The Mac app's update checker and its download links read `sevmorris/DoublEnder`'s latest release, and its `release.sh` prunes every `v…` release there, so a Windows release in that repository would be offered to every Mac and then deleted by the next Mac release. There is no release workflow yet: until there is, CI's artifacts are the builds.
+
 ## Layout
 
 | Target | What it is |
@@ -55,7 +59,7 @@ The zip contains `DoublEnder.exe`, `Resources\`, the Swift runtime DLLs, the Vis
 | `DoublEnderCore` | Everything except drawing: `AudioEngine` (devices, the pump thread, watchdogs), `TakeIO` (the take's disk writes, off the pump), `TakeWriter` (24-bit WAV, the sidecar, AAC), `PCMSidecar`, `CrashRecovery`, `InstanceLock`, `Log`, and `RecorderController`, which ports `RecorderViewModel`. |
 | `DoublEnder` | The faceplate UI and main loop, plus command-line diagnostics. |
 
-Names, messages and behaviour follow `../docs/THEORY_OF_OPERATION.md` wherever the platforms allow:
+Names, messages and behaviour follow the Mac app's [Theory of Operation](https://github.com/sevmorris/DoublEnder/blob/main/docs/THEORY_OF_OPERATION.md) wherever the platforms allow:
 
 - The four watchdogs: first buffer (5 s), data flow (3 s), the 1-second input-health poll, and dropped audio.
 - The disconnect latch: the first failure path wins.

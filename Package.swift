@@ -2,7 +2,7 @@
 //
 // DoublEnder for Windows and Linux.
 //
-// The Mac app (../DoublEnder, built with Xcode) stays as it is. This package
+// The Mac app (sevmorris/DoublEnder, built with Xcode) stays as it is. This package
 // rebuilds the same recorder on Swift's Linux and Windows toolchains:
 //
 //   CMiniaudio      miniaudio (vendored, public domain / MIT-0) plus a small

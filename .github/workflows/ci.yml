@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Builds and tests the package, and packages a release for each OS as an
+  # artifact. The Mac app lives in sevmorris/DoublEnder with its own CI.
+  linux:
+    runs-on: ubuntu-24.04
+    # Building on 24.04 sets the oldest glibc the static binary runs on.
+    container: swift:6.2-noble
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install X11 headers and ffmpeg
+        # GLFW compiles against the X11 headers but loads the libraries at
+        # runtime; ffmpeg lets the AAC test run.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+            ffmpeg binutils
+
+      - name: Test
+        run: swift test
+
+      - name: Package
+        run: scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: DoublEnder-linux
+          path: dist/*.tar.gz
+
+  # The ffmpeg.exe the Windows package ships for AAC: minimal and LGPL, built
+  # from the source pinned in Vendor/ffmpeg-manifest.env by our own recipe.
+  # Cached, so it rebuilds only when the recipe or the pin changes.
+  ffmpeg-windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: cache
+        uses: actions/cache@v6
+        with:
+          path: build/ffmpeg-windows
+          key: ffmpeg-windows-${{ hashFiles('scripts/build-ffmpeg-windows.sh', 'Vendor/ffmpeg-manifest.env') }}
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64 nasm
+          scripts/build-ffmpeg-windows.sh build/ffmpeg-windows
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-windows
+          path: build/ffmpeg-windows
+          if-no-files-found: error
+
+  windows:
+    needs: ffmpeg-windows
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-windows
+          path: build/ffmpeg-windows
+
+      # Pinned to a commit (v0.5.0): a third-party action runs with the
+      # job's token, so a moved tag or branch can't change what runs.
+      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057  # v0.5.0
+        with:
+          branch: swift-6.2-release
+          tag: 6.2-RELEASE
+
+      - name: Test
+        # With the shipped ffmpeg.exe first on PATH, the AAC test encodes
+        # through it, on Windows, as a guest's take would be.
+        shell: pwsh
+        run: |
+          $env:PATH = "$((Resolve-Path build\ffmpeg-windows).Path);$env:PATH"
+          swift test
+
+      - name: Package
+        shell: pwsh
+        run: scripts/package-windows.ps1 -Ffmpeg build\ffmpeg-windows\ffmpeg.exe
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: DoublEnder-windows
+          path: dist/*.zip

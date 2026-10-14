@@ -22,7 +22,7 @@ Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$out\licenses" | Out-Null
 Copy-Item "$bin\DoublEnder.exe" $out
 Copy-Item -Recurse Sources\DoublEnder\Resources "$out\Resources"
-Copy-Item ..\LICENSE "$out\licenses\DoublEnder-LICENSE.txt"
+Copy-Item LICENSE "$out\licenses\DoublEnder-LICENSE.txt"
 Copy-Item Vendor-licenses\* "$out\licenses\"
 Copy-Item packaging\README-guest.txt "$out\README.txt"
 
