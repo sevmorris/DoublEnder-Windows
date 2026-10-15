@@ -8,8 +8,9 @@
 //   CMiniaudio      miniaudio (vendored, public domain / MIT-0) plus a small
 //                   C capture shim — the real-time callback never enters Swift.
 //   CRaylib         raylib 5.5 (vendored, zlib) for the window and drawing.
-//   CPlatform       a few OS calls in C: the single-instance lock, and on
-//                   Windows a message box and bringing a window forward.
+//   CPlatform       a few OS calls in C: the single-instance lock, starting
+//                   ffmpeg on pipes (with no console window on Windows), and
+//                   on Windows a message box and bringing a window forward.
 //   DoublEnderCore  everything that isn't pixels: capture engine, WAV and
 //                   crash-recovery sidecar writers, the recorder state machine.
 //   DoublEnder      the faceplate UI and the main loop.

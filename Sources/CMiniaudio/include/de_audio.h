@@ -84,18 +84,15 @@ void de_capture_close(de_capture* cap);
 ma_format de_capture_format(const de_capture* cap);
 ma_uint32 de_capture_channels(const de_capture* cap);
 ma_uint32 de_capture_sample_rate(const de_capture* cap);
-ma_uint32 de_capture_bytes_per_frame(const de_capture* cap);
 /* Copies the channel map into `out` (up to `capacity`), returns channels. */
 ma_uint32 de_capture_channel_map(const de_capture* cap, ma_channel* out, ma_uint32 capacity);
-/* The backend's name for the open device. */
-void de_capture_device_name(const de_capture* cap, char* out, size_t capacity);
 
 /* Consumer side, one thread only. Copies whole frames, at most `maxBytes`,
    and returns the byte count (a multiple of the frame size). */
 size_t de_capture_read(de_capture* cap, void* dst, size_t maxBytes);
 
-/* Cumulative counters, safe from any thread. */
-ma_uint64 de_capture_frames_delivered(de_capture* cap);
+/* Frames the ring had no room for since the device opened. Safe from any
+   thread. */
 ma_uint64 de_capture_frames_dropped(de_capture* cap);
 /* Returns the DE_NOTE_* flags raised since the last call, and clears them. */
 ma_uint32 de_capture_take_notifications(de_capture* cap);

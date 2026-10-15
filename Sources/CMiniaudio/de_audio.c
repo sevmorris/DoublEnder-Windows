@@ -131,7 +131,6 @@ struct de_capture {
     ma_rb ring;
     ma_bool32 ringReady;
     ma_uint32 bytesPerFrame;
-    ma_uint64 framesDelivered;  /* atomic */
     ma_uint64 framesDropped;    /* atomic */
     ma_uint32 notifications;    /* atomic DE_NOTE_* bits */
 };
@@ -167,7 +166,6 @@ static void de_data_callback(ma_device* device, void* output, const void* input,
         src += chunk;
         remaining -= chunk;
     }
-    ma_atomic_fetch_add_64(&cap->framesDelivered, (ma_uint64)frameCount);
     if (framesFit < frameCount) {
         ma_atomic_fetch_add_64(&cap->framesDropped, (ma_uint64)(frameCount - framesFit));
     }
@@ -272,7 +270,6 @@ void de_capture_close(de_capture* cap)
 ma_format de_capture_format(const de_capture* cap)       { return cap->device.capture.format; }
 ma_uint32 de_capture_channels(const de_capture* cap)     { return cap->device.capture.channels; }
 ma_uint32 de_capture_sample_rate(const de_capture* cap)  { return cap->device.sampleRate; }
-ma_uint32 de_capture_bytes_per_frame(const de_capture* cap) { return cap->bytesPerFrame; }
 
 ma_uint32 de_capture_channel_map(const de_capture* cap, ma_channel* out, ma_uint32 capacity)
 {
@@ -282,11 +279,6 @@ ma_uint32 de_capture_channel_map(const de_capture* cap, ma_channel* out, ma_uint
         out[i] = cap->device.capture.channelMap[i];
     }
     return channels;
-}
-
-void de_capture_device_name(const de_capture* cap, char* out, size_t capacity)
-{
-    ma_strncpy_s(out, capacity, cap->device.capture.name, (size_t)-1);
 }
 
 size_t de_capture_read(de_capture* cap, void* dst, size_t maxBytes)
@@ -310,11 +302,6 @@ size_t de_capture_read(de_capture* cap, void* dst, size_t maxBytes)
         done += chunk;
     }
     return done;
-}
-
-ma_uint64 de_capture_frames_delivered(de_capture* cap)
-{
-    return ma_atomic_load_64(&cap->framesDelivered);
 }
 
 ma_uint64 de_capture_frames_dropped(de_capture* cap)

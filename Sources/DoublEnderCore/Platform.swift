@@ -140,16 +140,6 @@ public enum Platform {
         #endif
     }
 
-    /// Opens a web page in the default browser.
-    public static func openURL(_ url: URL) {
-        #if os(Windows)
-        let windir = ProcessInfo.processInfo.environment["WINDIR"] ?? "C:\\Windows"
-        run(windir + "\\explorer.exe", [url.absoluteString])
-        #else
-        if let open = findExecutable("xdg-open") { run(open, [url.absoluteString]) }
-        #endif
-    }
-
     // MARK: - Without a window
 
     /// An error shown by the system, for when the app couldn't open its own
