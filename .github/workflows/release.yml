@@ -130,8 +130,10 @@ jobs:
           cp artifacts/DoublEnder-windows-symbols/DoublEnder-"$version"-windows-x64-symbols.zip release/
           cp artifacts/DoublEnder-linux/DoublEnder-"$version"-linux-x86_64.tar.gz release/DoublEnder-linux-x86_64.tar.gz
           (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-          # SignPath asks for the code signing policy on every release page.
-          { cat "release-notes/v$version.md"; printf '\n[Code signing policy](%s)\n' \
+          # SignPath asks every release page to name it and link the code
+          # signing policy.
+          { cat "release-notes/v$version.md"
+            printf '\n**[Code signing policy](%s):** free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).\n' \
               "https://github.com/$GITHUB_REPOSITORY#code-signing-policy"; } > notes.md
           gh release create "$GITHUB_REF_NAME" release/* --draft --verify-tag \
             --title "DoublEnder $GITHUB_REF_NAME" --notes-file notes.md
