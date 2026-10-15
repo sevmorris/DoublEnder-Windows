@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for DoublEnder-Setup.exe. Paste it into the
+  SignPath project's artifact configuration; it lives here so it is reviewed
+  like the rest of the release machinery.
+
+  release.yml submits the CI artifact DoublEnder-windows (a zip holding
+  DoublEnder-Setup.exe) and passes `version`, the installer's four-part
+  version (2.6.0x is 2.6.0.0). SignPath signs only a file whose product name
+  is DoublEnder and whose product version is that version.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="DoublEnder-Setup.exe" product-name="DoublEnder" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

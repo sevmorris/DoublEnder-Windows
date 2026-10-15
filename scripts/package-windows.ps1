@@ -79,8 +79,11 @@ if (-not $iscc) {
         Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 if (-not $iscc) { throw "Inno Setup 6 isn't installed (winget install JRSoftware.InnoSetup)" }
-# Windows wants a numeric file version: 2.6.0x is 2.6.0.
-$fileVersion = $version -replace '[^0-9.].*$', ''
+# Windows wants a numeric file version, four parts: 2.6.0x is 2.6.0.0.
+# release.yml derives the same one for SignPath's version check.
+$parts = @(($version -replace '[^0-9.].*$', '').Split('.') | Where-Object { $_ -ne '' })
+while ($parts.Count -lt 4) { $parts += '0' }
+$fileVersion = $parts[0..3] -join '.'
 Remove-Item -Force dist\DoublEnder-Setup.exe -ErrorAction SilentlyContinue
 & $iscc /Q "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DStageDir=$((Resolve-Path $out).Path)" `
     "/DOutputDir=$((Resolve-Path dist).Path)" packaging\DoublEnder.iss

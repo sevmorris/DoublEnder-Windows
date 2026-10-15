@@ -58,7 +58,20 @@ To release, set the version in `Sources/DoublEnderCore/VersionFormatting.swift`,
 git tag v2.6.0x && git push origin v2.6.0x
 ```
 
-`.github/workflows/release.yml` first checks that the tag is the app's version, that the commit is on `main`, and that the notes exist. Then it builds with CI's own jobs and opens a **draft** release with `DoublEnder-Setup.exe`, `DoublEnder-linux-x86_64.tar.gz`, the symbols zip and `SHA256SUMS.txt`. Nothing is public until the draft is published by hand. The guests' files keep the same names in every release, so `https://github.com/sevmorris/DoublEnder-Windows/releases/latest/download/DoublEnder-Setup.exe` always downloads the newest. Each release carries its build's symbols zip (below), since a dump from that build can only be read with them.
+`.github/workflows/release.yml` first checks that the tag is the app's version, that the commit is on `main`, and that the notes exist. Then it builds with CI's own jobs and opens a **draft** release with `DoublEnder-Setup.exe`, `DoublEnder-linux-x86_64.tar.gz`, the symbols zip and `SHA256SUMS.txt`. Nothing is public until the draft is published by hand. Once SignPath is set up (see Code signing policy), the workflow submits the installer for signing before drafting, and waits for the request to be approved in SignPath; it needs the repository variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_SIGNING_POLICY_SLUG` and the secret `SIGNPATH_API_TOKEN`. Every release page links to the code signing policy. The guests' files keep the same names in every release, so `https://github.com/sevmorris/DoublEnder-Windows/releases/latest/download/DoublEnder-Setup.exe` always downloads the newest. Each release carries its build's symbols zip (below), since a dump from that build can only be read with them.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). This has been applied for; until it is in place, releases are unsigned.
+
+What is signed: `DoublEnder-Setup.exe`, the Windows installer, built from this repository by `.github/workflows/release.yml` on GitHub Actions and submitted to SignPath by that workflow. Nothing built anywhere else is signed. Each signing request is approved by hand in SignPath before a release is published. The installer carries third-party programs unsigned: the Swift runtime, the Visual C++ runtime, and `ffmpeg.exe`, which CI builds from the FFmpeg source pinned in `Vendor/ffmpeg-manifest.env`. SignPath's settings for it are in `packaging/signpath-artifact-configuration.xml`.
+
+Team roles:
+
+- Committers and reviewers: [Seven Morris](https://github.com/sevmorris)
+- Approvers: [Seven Morris](https://github.com/sevmorris)
+
+Privacy policy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. DoublEnder makes no network connections at all; recordings, settings and the log stay on the computer.
 
 ## Layout
 
@@ -127,4 +140,4 @@ Every Windows build is made with debug information, and `package-windows.ps1` pu
 - Windows has been run on one Windows 10 laptop with a USB microphone, which records through WASAPI. Still to check: the microphone privacy switch (it should show the "Microphone access is turned off" error), Bluetooth earbuds (not offered as a new microphone), a second launch (it should bring the first window forward), the Desktop path under OneDrive, high-DPI scaling, and that only the window's corners are transparent.
 - AAC on Windows still needs ffmpeg. Media Foundation's AAC encoder would do without it, but it tops out at 192 kbps (and takes 16-bit input), below the Mac's 256 kbps.
 - Linux runs under X11, or XWayland on Wayland desktops. Native Wayland would need GLFW's generated protocol sources.
-- Releases are unsigned. Until `DoublEnder-Setup.exe` is code-signed, Windows SmartScreen warns when it is run ("Windows protected your PC": More info, then Run anyway). The installed app doesn't warn again.
+- Releases are unsigned until SignPath signing is in place (see Code signing policy). Until then, Windows SmartScreen warns when `DoublEnder-Setup.exe` is run ("Windows protected your PC": More info, then Run anyway), and Microsoft Defender's machine-learning detection has quarantined it as `Trojan:Win32/Bearfoos.B!ml`, a false positive. The installed app hasn't been flagged.

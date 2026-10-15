@@ -2,7 +2,7 @@
 ; (preinstalled on GitHub's windows-2025 runner) compiles it from the folder
 ; scripts/package-windows.ps1 stages, which runs it as:
 ;
-;   ISCC /DAppVersion=2.6.0x /DFileVersion=2.6.0 /DStageDir=<folder> /DOutputDir=dist packaging\DoublEnder.iss
+;   ISCC /DAppVersion=2.6.0x /DFileVersion=2.6.0.0 /DStageDir=<folder> /DOutputDir=dist packaging\DoublEnder.iss
 ;
 ; It installs for the current user only, into %LOCALAPPDATA%\Programs\DoublEnder,
 ; so it never asks for an administrator: a guest on a work laptop can run it.
@@ -36,9 +36,15 @@ AppPublisher=Seven Morris
 AppPublisherURL=https://github.com/sevmorris/DoublEnder-Windows
 AppSupportURL=https://github.com/sevmorris/DoublEnder-Windows
 AppUpdatesURL=https://github.com/sevmorris/DoublEnder-Windows/releases/latest
+; SignPath checks the signed file's product name and version: DoublEnder,
+; and the four-part version, the same in every field of one build.
 VersionInfoVersion={#FileVersion}
 VersionInfoProductName=DoublEnder
+VersionInfoProductVersion={#FileVersion}
+VersionInfoProductTextVersion={#FileVersion}
 VersionInfoDescription=DoublEnder Setup
+VersionInfoCompany=Seven Morris
+VersionInfoCopyright=Copyright (c) 2026 Seven Morris
 ; Per user, no elevation: {autopf} is then %LOCALAPPDATA%\Programs.
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\DoublEnder

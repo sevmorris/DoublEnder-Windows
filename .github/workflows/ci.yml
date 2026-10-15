@@ -7,6 +7,10 @@ on:
   workflow_dispatch:
   # The release workflow builds with exactly these jobs.
   workflow_call:
+    outputs:
+      installer-artifact-id:
+        description: The DoublEnder-windows artifact (DoublEnder-Setup.exe), for signing
+        value: ${{ jobs.windows.outputs.installer-artifact-id }}
 
 jobs:
   # Builds and tests the package, and packages a release for each OS as an
@@ -68,6 +72,8 @@ jobs:
   windows:
     needs: ffmpeg-windows
     runs-on: windows-2025
+    outputs:
+      installer-artifact-id: ${{ steps.installer.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v7
 
@@ -125,7 +131,8 @@ jobs:
           Write-Host "Uninstalled cleanly"
 
       # The one file a guest downloads.
-      - uses: actions/upload-artifact@v7
+      - id: installer
+        uses: actions/upload-artifact@v7
         with:
           name: DoublEnder-windows
           path: dist/DoublEnder-Setup.exe
