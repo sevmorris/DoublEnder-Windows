@@ -1,0 +1,76 @@
+name: Release
+
+# Pushing a tag v<version> (the version in VersionFormatting.swift) builds
+# Windows and Linux with CI's own jobs and opens a *draft* release with:
+#
+#   DoublEnder-Setup.exe               the Windows installer, what guests download
+#   DoublEnder-linux-x86_64.tar.gz     the Linux build, with install.sh
+#   DoublEnder-<v>-windows-x64-symbols.zip   DoublEnder.pdb, for reading a dump
+#   SHA256SUMS.txt
+#
+# The guest files keep the same names in every release, so a link to
+# /releases/latest/download/DoublEnder-Setup.exe always gets the newest.
+# Nothing is public until the draft is published by hand. These releases
+# live here and never in sevmorris/DoublEnder, whose Mac app offers that
+# repository's latest release to every Mac.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # Fails before anything is built: a tag that isn't the app's version, a
+  # commit that isn't on main, or no curated notes for this version.
+  preflight:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Tag, version, branch and notes agree
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          app=$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' Sources/DoublEnderCore/VersionFormatting.swift)
+          if [ "$version" != "$app" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME, but VersionFormatting.swift says $app"; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main; releases are cut from main"; exit 1
+          fi
+          if [ ! -s "release-notes/v$version.md" ]; then
+            echo "::error::release-notes/v$version.md is missing; a release's notes are written, not generated"; exit 1
+          fi
+
+  build:
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: DoublEnder-*
+          path: artifacts
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir release
+          cp artifacts/DoublEnder-windows/DoublEnder-Setup.exe release/
+          cp artifacts/DoublEnder-windows-symbols/DoublEnder-"$version"-windows-x64-symbols.zip release/
+          cp artifacts/DoublEnder-linux/DoublEnder-"$version"-linux-x86_64.tar.gz release/DoublEnder-linux-x86_64.tar.gz
+          (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release create "$GITHUB_REF_NAME" release/* --draft --verify-tag \
+            --title "DoublEnder $GITHUB_REF_NAME" --notes-file "release-notes/v$version.md"
+          echo "Draft ready: publish it on GitHub when it has been checked."

@@ -5,8 +5,9 @@ Pick your microphone, press the big button, and your recording is saved
 to your Desktop. Send that file to your producer when you're done.
 
 Starting it
-  Windows: double-click DoublEnder.exe. Keep this folder together; the
-           app needs the files beside it.
+  Windows: run DoublEnder-Setup.exe. DoublEnder is then in the Start
+           menu and on the Desktop. If Windows says it "protected your
+           PC", click "More info", then "Run anyway".
   Linux:   open a terminal in this folder and run ./install.sh once.
            DoublEnder is then in your applications menu, and this
            folder can go. (Or run ./DoublEnder here without installing.)

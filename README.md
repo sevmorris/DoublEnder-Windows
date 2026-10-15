@@ -32,22 +32,33 @@ The package is one statically linked binary plus `Resources/`. It runs on any di
 ### Windows
 
 1. Install Swift: `winget install --id Swift.Toolchain` (it brings the Visual Studio build tools it needs; see [swift.org/install/windows](https://www.swift.org/install/windows/)).
-2. In a new terminal:
+2. To package it, install Inno Setup 6: `winget install JRSoftware.InnoSetup`.
+3. In a new terminal:
 
 ```powershell
 swift build
 swift run DoublEnder
 swift test
-pwsh scripts/package-windows.ps1 -Ffmpeg build\ffmpeg-windows\ffmpeg.exe   # dist\DoublEnder-<version>-windows-x64.zip
+pwsh scripts/package-windows.ps1 -Ffmpeg build\ffmpeg-windows\ffmpeg.exe   # dist\DoublEnder-Setup.exe
 ```
 
-The zip contains `DoublEnder.exe`, `Resources\`, the Swift runtime DLLs, the Visual C++ runtime, and `ffmpeg.exe` with its licence and source note if you passed one. Guests unzip it and double-click the exe. A release build is a GUI program (no console window).
+The package script stages `DoublEnder.exe`, `Resources\`, the Swift runtime DLLs, the Visual C++ runtime, and `ffmpeg.exe` with its licence and source note if you passed one, in `dist\DoublEnder-<version>-windows-x64`. It then compiles that folder into `DoublEnder-Setup.exe` with Inno Setup (`packaging/DoublEnder.iss`). That one file is what guests download. It installs for the current user only, into `%LOCALAPPDATA%\Programs\DoublEnder`, so it never asks for an administrator. It adds Start menu and Desktop shortcuts and an entry in Settings > Apps to uninstall it. Setup and the uninstaller wait while DoublEnder is running (they check its single-instance mutex) instead of replacing files under a recording. Settings, the log and the recordings are never the installer's, so upgrades and uninstalls leave them alone. CI installs every build silently on the runner, checks the files and the installed `ffmpeg.exe`, and uninstalls it again. A release build is a GUI program (no console window).
+
+A single portable `.exe` would need the Swift runtime linked into it. On Windows, Swift can do that only in experimental toolchains so far, and the exe would still need the Visual C++ runtime and `ffmpeg.exe` beside it.
 
 `ffmpeg.exe` comes from `scripts/build-ffmpeg-windows.sh`, never from `PATH`: a 5 MB LGPL build of the FFmpeg source pinned in `Vendor/ffmpeg-manifest.env`, with only what the AAC encode needs. It cross-compiles with mingw-w64 and nasm (apt on Ubuntu or WSL, Homebrew on a Mac) into `build/ffmpeg-windows`, along with `ffmpeg-LICENSE.txt` and `ffmpeg-SOURCE.txt`, which the package script requires beside it. The same toolchain rebuilds it byte for byte. CI builds it (cached until the recipe or the pin changes), runs the AAC test through it on Windows, and packages it. `--native` builds the same components for the machine you're on, to try a change to the encode command.
 
 ## Releases
 
-Windows and Linux builds are published on this repository's Releases page, never on the Mac app's. The Mac app's update checker and its download links read `sevmorris/DoublEnder`'s latest release, and its `release.sh` prunes every `v…` release there, so a Windows release in that repository would be offered to every Mac and then deleted by the next Mac release. There is no release workflow yet: until there is, CI's artifacts are the builds. Each release should keep the build's symbols zip (below) beside it, since a dump from that build can only be read with them.
+Windows and Linux builds are published on this repository's Releases page, never on the Mac app's. The Mac app's update checker and its download links read `sevmorris/DoublEnder`'s latest release, and its `release.sh` prunes every `v…` release there, so a Windows release in that repository would be offered to every Mac and then deleted by the next Mac release.
+
+To release, set the version in `Sources/DoublEnderCore/VersionFormatting.swift`, write `release-notes/v<version>.md`, merge both to `main`, then tag that commit and push the tag:
+
+```sh
+git tag v2.6.0x && git push origin v2.6.0x
+```
+
+`.github/workflows/release.yml` first checks that the tag is the app's version, that the commit is on `main`, and that the notes exist. Then it builds with CI's own jobs and opens a **draft** release with `DoublEnder-Setup.exe`, `DoublEnder-linux-x86_64.tar.gz`, the symbols zip and `SHA256SUMS.txt`. Nothing is public until the draft is published by hand. The guests' files keep the same names in every release, so `https://github.com/sevmorris/DoublEnder-Windows/releases/latest/download/DoublEnder-Setup.exe` always downloads the newest. Each release carries its build's symbols zip (below), since a dump from that build can only be read with them.
 
 ## Layout
 
@@ -70,7 +81,7 @@ Names, messages and behaviour follow the Mac app's [Theory of Operation](https:/
 
 ## Differences from the Mac app
 
-- **AAC needs ffmpeg.** Linux and Windows have no built-in AAC encoder Swift can call. ffmpeg encodes an AAC take while it records, as AVAssetWriter does on the Mac: 256 kbps mono at 48 kHz, with the notes in the description tag, into a temporary file that is renamed into place when the take stops, so STOP waits only for its last few blocks. The Float32 sidecar is written beside it, so a take is crash-safe from its first sample. If ffmpeg won't start, stops reading, or leaves an unfinished file, the take is encoded from the sidecar after STOP instead, with "SAVING… N%" on the faceplate (about 3 minutes for a 35-minute take on an older laptop). If that fails too, the sidecar is recovered to a WAV on the spot. The log's line for each take says which way it was saved. Without ffmpeg (next to the app or on `PATH`), the format picker offers WAV only. The Windows zip carries its own minimal build (see Building); Linux uses the system's.
+- **AAC needs ffmpeg.** Linux and Windows have no built-in AAC encoder Swift can call. ffmpeg encodes an AAC take while it records, as AVAssetWriter does on the Mac: 256 kbps mono at 48 kHz, with the notes in the description tag, into a temporary file that is renamed into place when the take stops, so STOP waits only for its last few blocks. The Float32 sidecar is written beside it, so a take is crash-safe from its first sample. If ffmpeg won't start, stops reading, or leaves an unfinished file, the take is encoded from the sidecar after STOP instead, with "SAVING… N%" on the faceplate (about 3 minutes for a 35-minute take on an older laptop). If that fails too, the sidecar is recovered to a WAV on the spot. The log's line for each take says which way it was saved. Without ffmpeg (next to the app or on `PATH`), the format picker offers WAV only. The Windows installer carries its own minimal build (see Building); Linux uses the system's.
 - **WAV** is written as on the Mac: 24-bit mono at the device's native rate. The header sizes stay at zero until the take finishes, so a crashed WAV reads as empty and recovery uses the sidecar.
 - **Popovers and dialogs** are drawn inside the window, because raylib can't open the Mac's floating panels.
 - **Window controls:** the borderless window has small minimise and close buttons in the plate's top-right corner. Ctrl+Q / Ctrl+W quit through the same "Recording in progress" prompt as ⌘Q, and Ctrl+M minimises. Shortcuts follow the key's label in the current layout, so Ctrl+A on a French keyboard doesn't quit.
@@ -109,11 +120,11 @@ The app logs to `%LOCALAPPDATA%\DoublEnder\DoublEnder.log` or `~/.local/state/Do
 
 If no OpenGL 3.3 window can be opened, the app says so in a system dialog rather than exiting silently: a message box on Windows, zenity or kdialog on Linux.
 
-Every Windows build is made with debug information, and `package-windows.ps1` puts its `DoublEnder.pdb` in `dist\DoublEnder-<version>-windows-x64-symbols.zip`, never in the guests' zip; CI uploads it as the `DoublEnder-windows-symbols` artifact. With it, a crash or hang dump from that exact build reads down to function names: in WinDbg, `.sympath+ <folder with DoublEnder.pdb>` then `.reload`. A PDB from any other build doesn't match, so keep each one with its build.
+Every Windows build is made with debug information, and `package-windows.ps1` puts its `DoublEnder.pdb` in `dist\DoublEnder-<version>-windows-x64-symbols.zip`, never in the installer; CI uploads it as the `DoublEnder-windows-symbols` artifact. With it, a crash or hang dump from that exact build reads down to function names: in WinDbg, `.sympath+ <folder with DoublEnder.pdb>` then `.reload`. A PDB from any other build doesn't match, so keep each one with its build.
 
 ## Known gaps
 
 - Windows has been run on one Windows 10 laptop with a USB microphone, which records through WASAPI. Still to check: the microphone privacy switch (it should show the "Microphone access is turned off" error), Bluetooth earbuds (not offered as a new microphone), a second launch (it should bring the first window forward), the Desktop path under OneDrive, high-DPI scaling, and that only the window's corners are transparent.
 - AAC on Windows still needs ffmpeg. Media Foundation's AAC encoder would do without it, but it tops out at 192 kbps (and takes 16-bit input), below the Mac's 256 kbps.
 - Linux runs under X11, or XWayland on Wayland desktops. Native Wayland would need GLFW's generated protocol sources.
-- Releases are unsigned. Windows SmartScreen will warn on first run until the exe is code-signed.
+- Releases are unsigned. Until `DoublEnder-Setup.exe` is code-signed, Windows SmartScreen warns when it is run ("Windows protected your PC": More info, then Run anyway). The installed app doesn't warn again.
