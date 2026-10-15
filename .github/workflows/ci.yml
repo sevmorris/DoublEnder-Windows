@@ -112,8 +112,10 @@ jobs:
           }
           $version = (Get-ItemProperty $key).DisplayVersion
           Write-Host "Installed per user: DoublEnder $version in $dir"
-          & "$dir\ffmpeg.exe" -hide_banner -version | Select-Object -First 1
+          # All of its output first: cutting the pipe short fails its writes.
+          $ffmpegVersion = & "$dir\ffmpeg.exe" -hide_banner -version
           if ($LASTEXITCODE -ne 0) { throw "The installed ffmpeg.exe didn't run" }
+          $ffmpegVersion | Select-Object -First 1
           Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           # The uninstaller hands over to a copy of itself and exits early.
           $deadline = (Get-Date).AddSeconds(60)
