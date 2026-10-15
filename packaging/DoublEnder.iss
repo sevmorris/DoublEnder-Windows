@@ -36,8 +36,8 @@ AppPublisher=Seven Morris
 AppPublisherURL=https://github.com/sevmorris/DoublEnder-Windows
 AppSupportURL=https://github.com/sevmorris/DoublEnder-Windows
 AppUpdatesURL=https://github.com/sevmorris/DoublEnder-Windows/releases/latest
-; SignPath checks the signed file's product name and version: DoublEnder,
-; and the four-part version, the same in every field of one build.
+; What Setup's Properties > Details shows: DoublEnder, and the four-part
+; version, the same in every field of one build.
 VersionInfoVersion={#FileVersion}
 VersionInfoProductName=DoublEnder
 VersionInfoProductVersion={#FileVersion}

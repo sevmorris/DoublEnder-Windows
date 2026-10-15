@@ -10,14 +10,6 @@ name: Release
 #
 # The guest files keep the same names in every release, so a link to
 # /releases/latest/download/DoublEnder-Setup.exe always gets the newest.
-#
-# DoublEnder-Setup.exe is signed through the SignPath Foundation's free
-# signing for open-source projects once the repository has the variables
-# SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG and
-# SIGNPATH_SIGNING_POLICY_SLUG and the secret SIGNPATH_API_TOKEN (see
-# README, "Code signing policy"). Each signing request waits for an
-# approver in SignPath. Without them the draft is unsigned; with them, a
-# signing failure stops the release rather than draft it unsigned.
 # Nothing is public until the draft is published by hand. These releases
 # live here and never in sevmorris/DoublEnder, whose Mac app offers that
 # repository's latest release to every Mac.
@@ -33,16 +25,12 @@ jobs:
   # commit that isn't on main, or no curated notes for this version.
   preflight:
     runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.check.outputs.version }}
-      file-version: ${{ steps.check.outputs.file-version }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Tag, version, branch and notes agree
-        id: check
         run: |
           version="${GITHUB_REF_NAME#v}"
           app=$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' Sources/DoublEnderCore/VersionFormatting.swift)
@@ -55,55 +43,13 @@ jobs:
           if [ ! -s "release-notes/v$version.md" ]; then
             echo "::error::release-notes/v$version.md is missing; a release's notes are written, not generated"; exit 1
           fi
-          # The four-part version package-windows.ps1 gives the installer:
-          # 2.6.0x is 2.6.0.0.
-          IFS=. read -r -a parts <<< "${version%%[!0-9.]*}"
-          while [ "${#parts[@]}" -lt 4 ]; do parts+=(0); done
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "file-version=${parts[0]}.${parts[1]}.${parts[2]}.${parts[3]}" >> "$GITHUB_OUTPUT"
 
   build:
     needs: preflight
     uses: ./.github/workflows/ci.yml
 
-  sign:
-    needs: [preflight, build]
-    if: vars.SIGNPATH_ORGANIZATION_ID != ''
-    runs-on: windows-2025
-    # Waits for an approver to approve the request in SignPath.
-    timeout-minutes: 330
-    steps:
-      # Pinned to a commit (v3.0): a third-party action runs with the job's
-      # token, so a moved tag or branch can't change what runs.
-      - uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3.0
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          github-artifact-id: ${{ needs.build.outputs.installer-artifact-id }}
-          parameters: |
-            version: "${{ needs.preflight.outputs.file-version }}"
-          wait-for-completion-timeout-in-seconds: 19200
-          output-artifact-directory: signed
-
-      - name: Check the signature
-        shell: pwsh
-        run: |
-          $signature = Get-AuthenticodeSignature signed\DoublEnder-Setup.exe
-          if ($signature.Status -ne 'Valid') { throw "DoublEnder-Setup.exe isn't validly signed: $($signature.StatusMessage)" }
-          Write-Host "Signed by $($signature.SignerCertificate.Subject)"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: DoublEnder-windows-signed
-          path: signed/DoublEnder-Setup.exe
-          if-no-files-found: error
-
   publish:
-    needs: [build, sign]
-    # Unsigned only when signing isn't set up; a failed signing stops here.
-    if: always() && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.sign.result)
+    needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -121,20 +67,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir release
-          if [ -f artifacts/DoublEnder-windows-signed/DoublEnder-Setup.exe ]; then
-            cp artifacts/DoublEnder-windows-signed/DoublEnder-Setup.exe release/
-          else
-            echo "::warning::Signing isn't set up: DoublEnder-Setup.exe is unsigned"
-            cp artifacts/DoublEnder-windows/DoublEnder-Setup.exe release/
-          fi
+          cp artifacts/DoublEnder-windows/DoublEnder-Setup.exe release/
           cp artifacts/DoublEnder-windows-symbols/DoublEnder-"$version"-windows-x64-symbols.zip release/
           cp artifacts/DoublEnder-linux/DoublEnder-"$version"-linux-x86_64.tar.gz release/DoublEnder-linux-x86_64.tar.gz
           (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-          # SignPath asks every release page to name it and link the code
-          # signing policy.
-          { cat "release-notes/v$version.md"
-            printf '\n**[Code signing policy](%s):** free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).\n' \
-              "https://github.com/$GITHUB_REPOSITORY#code-signing-policy"; } > notes.md
           gh release create "$GITHUB_REF_NAME" release/* --draft --verify-tag \
-            --title "DoublEnder $GITHUB_REF_NAME" --notes-file notes.md
+            --title "DoublEnder $GITHUB_REF_NAME" --notes-file "release-notes/v$version.md"
           echo "Draft ready: publish it on GitHub when it has been checked."

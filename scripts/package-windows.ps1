@@ -80,7 +80,6 @@ if (-not $iscc) {
 }
 if (-not $iscc) { throw "Inno Setup 6 isn't installed (winget install JRSoftware.InnoSetup)" }
 # Windows wants a numeric file version, four parts: 2.6.0x is 2.6.0.0.
-# release.yml derives the same one for SignPath's version check.
 $parts = @(($version -replace '[^0-9.].*$', '').Split('.') | Where-Object { $_ -ne '' })
 while ($parts.Count -lt 4) { $parts += '0' }
 $fileVersion = $parts[0..3] -join '.'
