@@ -1,7 +1,10 @@
-# Builds a Windows release folder and zip: DoublEnder.exe, its art and
-# fonts, the Swift runtime DLLs it links against and, if given, ffmpeg.exe
-# for AAC. Run from a shell where `swift` works (the Swift installer puts
-# its runtime on PATH).
+# Builds the Windows release: dist\DoublEnder-Setup.exe, the one file a
+# guest downloads, and a symbols zip for reading crash dumps. It stages
+# DoublEnder.exe, its art and fonts, the Swift runtime DLLs it links
+# against and, if given, ffmpeg.exe for AAC in dist\DoublEnder-<version>-
+# windows-x64, then compiles that folder into an installer with Inno Setup 6
+# (packaging\DoublEnder.iss). Run from a shell where `swift` works (the
+# Swift installer puts its runtime on PATH).
 #
 #   pwsh scripts/package-windows.ps1 [-Ffmpeg build\ffmpeg-windows\ffmpeg.exe]
 param([string]$Ffmpeg = "")
@@ -66,7 +69,25 @@ if ($Ffmpeg) {
     Write-Host "No -Ffmpeg: this build records WAV only."
 }
 
-Compress-Archive -Force -Path $out -DestinationPath "dist\$name.zip"
+# The installer. Swift can't yet link its runtime into the exe on Windows,
+# and the exe would still need the Visual C++ runtime and ffmpeg.exe beside
+# it, so guests get one Setup file instead of this folder.
+$iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+if (-not $iscc) {
+    $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+              "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (-not $iscc) { throw "Inno Setup 6 isn't installed (winget install JRSoftware.InnoSetup)" }
+# Windows wants a numeric file version, four parts: 2.6.0x is 2.6.0.0.
+# release.yml derives the same one for SignPath's version check.
+$parts = @(($version -replace '[^0-9.].*$', '').Split('.') | Where-Object { $_ -ne '' })
+while ($parts.Count -lt 4) { $parts += '0' }
+$fileVersion = $parts[0..3] -join '.'
+Remove-Item -Force dist\DoublEnder-Setup.exe -ErrorAction SilentlyContinue
+& $iscc /Q "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DStageDir=$((Resolve-Path $out).Path)" `
+    "/DOutputDir=$((Resolve-Path dist).Path)" packaging\DoublEnder.iss
+if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
 # The symbols, kept with the build they belong to. WinDbg matches the PDB
 # to the exe by the GUID the linker recorded, and looks for it by its own
@@ -77,4 +98,4 @@ New-Item -ItemType Directory -Force $symbols | Out-Null
 Copy-Item $pdb $symbols
 Compress-Archive -Force -Path "$symbols\DoublEnder.pdb" -DestinationPath "dist\$name-symbols.zip"
 Write-Host "dist\$name-symbols.zip"
-Write-Host "dist\$name.zip"
+Write-Host "dist\DoublEnder-Setup.exe"

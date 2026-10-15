@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The release workflow builds with exactly these jobs.
+  workflow_call:
+    outputs:
+      installer-artifact-id:
+        description: The DoublEnder-windows artifact (DoublEnder-Setup.exe), for signing
+        value: ${{ jobs.windows.outputs.installer-artifact-id }}
 
 jobs:
   # Builds and tests the package, and packages a release for each OS as an
@@ -66,6 +72,8 @@ jobs:
   windows:
     needs: ffmpeg-windows
     runs-on: windows-2025
+    outputs:
+      installer-artifact-id: ${{ steps.installer.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v7
 
@@ -93,12 +101,42 @@ jobs:
         shell: pwsh
         run: scripts/package-windows.ps1 -Ffmpeg build\ffmpeg-windows\ffmpeg.exe
 
-      - uses: actions/upload-artifact@v7
+      - name: Install, check and uninstall
+        # As a guest would get it: per user, with no administrator, every
+        # file in place and ffmpeg.exe working; then the uninstaller takes
+        # it all away again. DoublEnder.exe itself can't run here (no
+        # OpenGL 3.3 on the runner).
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\Programs\DoublEnder"
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0D27D1E9-E677-4B5C-B9B4-4B9775F742D6}_is1'
+          $setup = Start-Process dist\DoublEnder-Setup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Setup exited $($setup.ExitCode)" }
+          foreach ($file in 'DoublEnder.exe', 'ffmpeg.exe', 'swiftCore.dll', 'vcruntime140.dll', 'DoublEnder.ico',
+                            'Resources\Images\faceplate.png', 'licenses\ffmpeg-LICENSE.txt', 'unins000.exe') {
+            if (-not (Test-Path "$dir\$file")) { throw "Not installed: $file" }
+          }
+          $version = (Get-ItemProperty $key).DisplayVersion
+          Write-Host "Installed per user: DoublEnder $version in $dir"
+          # All of its output first: cutting the pipe short fails its writes.
+          $ffmpegVersion = & "$dir\ffmpeg.exe" -hide_banner -version
+          if ($LASTEXITCODE -ne 0) { throw "The installed ffmpeg.exe didn't run" }
+          $ffmpegVersion | Select-Object -First 1
+          Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          # The uninstaller hands over to a copy of itself and exits early.
+          $deadline = (Get-Date).AddSeconds(60)
+          while (((Test-Path "$dir\DoublEnder.exe") -or (Test-Path $key)) -and (Get-Date) -lt $deadline) { Start-Sleep 1 }
+          if (Test-Path "$dir\DoublEnder.exe") { throw "The uninstaller left DoublEnder.exe behind" }
+          if (Test-Path $key) { throw "The uninstaller left its Settings > Apps entry behind" }
+          Write-Host "Uninstalled cleanly"
+
+      # The one file a guest downloads.
+      - id: installer
+        uses: actions/upload-artifact@v7
         with:
           name: DoublEnder-windows
-          path: |
-            dist/*.zip
-            !dist/*-symbols.zip
+          path: dist/DoublEnder-Setup.exe
+          if-no-files-found: error
 
       # DoublEnder.pdb for this exact build, never shipped to guests: what a
       # crash or hang dump from it needs to be read down to function names.
