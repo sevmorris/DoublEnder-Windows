@@ -140,22 +140,6 @@ final class TakeIOTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: PCMSidecar.url(for: url).path), "sidecar removed")
     }
 
-    /// Runs main-loop work (`MainQueue`) until `done` or the timeout.
-    @discardableResult
-    private func runMainLoop(until done: () -> Bool = { false }, timeout: Double = 5) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            MainQueue.drain()
-            if done() { return true }
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        return false
-    }
-
-    private func runMainLoop(for seconds: Double) {
-        runMainLoop(until: { false }, timeout: seconds)
-    }
-
     func testTakeReportLine() throws {
         let url = dir.appendingPathComponent("Take.wav")
         let writer = try TakeWriter(mainURL: url, format: .wav, notes: "", sampleRate: 48_000)

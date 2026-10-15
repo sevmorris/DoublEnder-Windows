@@ -96,7 +96,11 @@ public final class AudioEngine {
     /// False when the last pick could not be opened; the previous device
     /// stays bound, as on the Mac, but RECORD stays off until a good pick.
     public private(set) var selectedDeviceUsable = true
-    public private(set) var isRebuilding = false
+    /// A pick is still opening. True until the last one queued finishes:
+    /// each pick replaces the device, so a take started after the first of
+    /// two would have its input swapped under it by the second.
+    public var isRebuilding: Bool { pendingOpens > 0 }
+    private var pendingOpens = 0
     public private(set) var boundDeviceUID: String?
     /// Why the last open failed, for the error state.
     public private(set) var lastOpenError: String?
@@ -305,7 +309,7 @@ public final class AudioEngine {
     /// Binds `device` (nil = system default). Refused during a take.
     public func setDevice(_ device: InputDevice?) {
         guard let context, !isRecordingActive else { return }
-        isRebuilding = true
+        pendingOpens += 1
         let idBytes = device?.idBytes
         deviceQueue.async { [weak self] in
             guard let self else { return }
@@ -339,7 +343,7 @@ public final class AudioEngine {
                 de_capture_close(old)
                 Log.info("Input: \(device?.name ?? "the system default"), \(Int(format.sampleRate)) Hz, \(format.channels) ch, \(format.sampleFormat.diagnosticName) (\(self.backendName))")
                 MainQueue.post {
-                    self.isRebuilding = false
+                    self.pendingOpens -= 1
                     self.engineHealthy = true
                     self.selectedDeviceUsable = true
                     self.accessDenied = false
@@ -353,7 +357,7 @@ public final class AudioEngine {
                     : "Couldn't open \(device?.name ?? "the microphone") (\(String(cString: ma_result_description(result))))."
                 Log.error("Opening input failed: \(message)")
                 MainQueue.post {
-                    self.isRebuilding = false
+                    self.pendingOpens -= 1
                     self.lastOpenError = message
                     self.accessDenied = denied
                     if self.locked({ self.capture != nil }) {
@@ -399,8 +403,9 @@ public final class AudioEngine {
     // MARK: - Takes
 
     /// Opens the take's files and starts writing from the next buffer.
+    /// Refused while a pick is still opening (`isRebuilding`).
     public func startRecording(to url: URL, format outputFormat: OutputFormat, notes: String) throws {
-        guard let format = currentFormat, engineHealthy else { throw RecordingError.noInput }
+        guard let format = currentFormat, engineHealthy, !isRebuilding else { throw RecordingError.noInput }
         let writer = try TakeWriter(mainURL: url, format: outputFormat, notes: notes,
                                     sampleRate: format.sampleRate)
         lock.lock()

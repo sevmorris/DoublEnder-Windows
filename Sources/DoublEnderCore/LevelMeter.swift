@@ -31,14 +31,4 @@ public enum LevelMeter {
     public static func clampedDisplayDB(fromLinear linear: Float) -> Float {
         max(dbFloor, min(dbCeiling, dbFS(fromLinear: linear)))
     }
-
-    /// Peak linear level (max abs, not RMS).
-    public static func peakLinear(in samples: UnsafeBufferPointer<Float>) -> Float {
-        var peak: Float = 0
-        for s in samples {
-            let a = abs(s)
-            if a > peak { peak = a }
-        }
-        return peak
-    }
 }

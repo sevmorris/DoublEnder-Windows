@@ -9,9 +9,10 @@ import Foundation
 /// the next launch. It exists on disk if and only if the take's main file
 /// was never finalized.
 ///
-/// In this port it is also the source of an AAC take: the M4A is encoded
-/// from it when the take stops (see `AACEncoder`), so an AAC recording is
-/// crash-safe from its first sample.
+/// In this port it also backs up an AAC take: the M4A is encoded live
+/// (`LiveEncoder`), and if that fails it is encoded from the sidecar after
+/// STOP (`AACEncoder`), so an AAC recording is crash-safe from its first
+/// sample.
 public final class PCMSidecar {
     /// `Recording.m4a` → `Recording.m4a.pcmrec`.
     public static let pathExtension = "pcmrec"
