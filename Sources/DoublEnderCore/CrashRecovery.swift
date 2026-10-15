@@ -94,30 +94,40 @@ public enum CrashRecovery {
             message: "Re-wrapping the audio into a WAV file. This can take a moment for a long recording.",
             buttons: [], showsSpinner: true)
         dialogs.present(working, first: true)
+        recover(sidecar: sidecar, main: main) { outcome in
+            switch outcome {
+            case .success(let url):
+                dialogs.replace(working.id, with: Dialog(
+                    icon: .success, title: "RECOVERY COMPLETE",
+                    message: "The recording was saved as:",
+                    fileName: url.lastPathComponent,
+                    buttons: [
+                        .init("SHOW IN \(Platform.fileManagerName.uppercased())") { Platform.reveal(url) },
+                        .init("CLOSE", isDefault: true),
+                    ]))
+            case .failure(let error):
+                dialogs.replace(working.id, with: Dialog(
+                    icon: .warning, title: "RECOVERY FAILED",
+                    message: "The recording could not be recovered: \(error.localizedDescription)\n\nThe recovery file has been left in place so nothing is lost.",
+                    buttons: [.init("CLOSE", isDefault: true)]))
+            }
+        }
+    }
+
+    /// Re-wraps `sidecar` into a WAV off the main loop, since a long take's
+    /// is gigabytes, then deletes it and `main`, the take's unfinished file.
+    /// On failure both stay. `done` runs on the main loop.
+    static func recover(sidecar: URL, main: URL, done: @escaping (Result<URL, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome = Result { try PCMSidecar.recoverToWAV(sidecarURL: sidecar) }
-            if case .success = outcome {
+            switch outcome {
+            case .success:
                 try? FileManager.default.removeItem(at: sidecar)
                 try? FileManager.default.removeItem(at: main)
+            case .failure(let error):
+                Log.error("Sidecar recovery failed: \(error.localizedDescription)")
             }
-            MainQueue.post {
-                switch outcome {
-                case .success(let url):
-                    dialogs.replace(working.id, with: Dialog(
-                        icon: .success, title: "RECOVERY COMPLETE",
-                        message: "The recording was saved as:",
-                        fileName: url.lastPathComponent,
-                        buttons: [
-                            .init("SHOW IN \(Platform.fileManagerName.uppercased())") { Platform.reveal(url) },
-                            .init("CLOSE", isDefault: true),
-                        ]))
-                case .failure(let error):
-                    dialogs.replace(working.id, with: Dialog(
-                        icon: .warning, title: "RECOVERY FAILED",
-                        message: "The recording could not be recovered: \(error.localizedDescription)\n\nThe recovery file has been left in place so nothing is lost.",
-                        buttons: [.init("CLOSE", isDefault: true)]))
-                }
-            }
+            MainQueue.post { done(outcome) }
         }
     }
 }

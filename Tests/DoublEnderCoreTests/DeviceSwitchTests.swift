@@ -47,4 +47,30 @@ final class DeviceSwitchTests: XCTestCase {
         XCTAssertNotNil(startError, "so no take starts on the device it is about to replace")
         XCTAssertFalse(engine.isRecordingActive)
     }
+
+    /// The input is lost while a take is running or saving. Picking another
+    /// is refused until the stop has finished, so the controller makes the
+    /// switch then; it used to drop it, leaving no input and RECORD off.
+    func testInputLostDuringATakeIsReplacedOnceItStops() throws {
+        let engine = AudioEngine(nullBackend: true)
+        defer { engine.shutdown() }
+        let controller = RecorderController(engine: engine, settings: SettingsStore(directory: nil),
+                                            recordingsDirectory: dir, aacAvailable: false)
+        controller.launch(recoverInterruptedTakes: false)
+        XCTAssertTrue(runMainLoop(until: { controller.canStartRecording }), "the null input opens")
+        controller.startRecording()
+        XCTAssertTrue(controller.isCurrentlyRecording)
+
+        // What the engine reports when the bound input vanishes outside a
+        // take, as it does while one is saving.
+        engine.onActiveInputLostWhileIdle?()
+        XCTAssertTrue(runMainLoop(until: { controller.inputSwitchAfterStop }), "the switch waits for the stop")
+        XCTAssertFalse(engine.isRebuilding, "nothing was picked during the take")
+
+        controller.stopRecording()
+        XCTAssertTrue(runMainLoop(until: { !controller.isStopping }, timeout: 10), "the stop completes")
+        XCTAssertFalse(controller.inputSwitchAfterStop)
+        XCTAssertTrue(runMainLoop(until: { engine.isRebuilding }), "the fallback input is opened")
+        XCTAssertTrue(runMainLoop(until: { controller.canStartRecording }), "and RECORD comes back")
+    }
 }

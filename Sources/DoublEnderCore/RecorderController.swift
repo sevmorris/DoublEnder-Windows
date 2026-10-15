@@ -57,6 +57,8 @@ public final class RecorderController {
     private var lastInputLossAlertAt: Double = -.infinity
     private var dismissedNewDevices: Set<String> = []
     private var isFinalizingRecording = false
+    /// The input was lost while a take was stopping; switch when it's done.
+    private(set) var inputSwitchAfterStop = false
     private var quitWhenStopped = false
     private var quitPromptID: UUID?
     private var launched = false
@@ -188,8 +190,16 @@ public final class RecorderController {
     }
 
     private func switchToFallbackInputAfterLoss() {
+        inputSwitchAfterStop = false
         engine.refreshDevices { [weak self] in
             guard let self else { return }
+            // A take or its save is still running, and the pick would be
+            // refused: an input lost during "SAVING…" left none bound. Switch
+            // once the stop has finished (`finishStop`).
+            if self.isCurrentlyRecording || self.isStopping {
+                self.inputSwitchAfterStop = true
+                return
+            }
             if let fallback = self.engine.defaultInputDevice() {
                 self.selectInput(fallback.uid)
             } else {
@@ -297,47 +307,72 @@ public final class RecorderController {
                 completion?()
                 return
             }
-            self.isFinalizingRecording = false
-            self.isStopping = false
-            self.saveProgress = nil
             let diskReason = self.diskStopReason
-            let diskNote = diskReason.map { Self.diskStopNote(reason: $0) }
             self.diskStopReason = nil
+            // The main file failed: re-wrap the sidecar into a WAV now, so
+            // the guest leaves with a file rather than a relaunch
+            // instruction. Off the main loop, under "SAVING…": a long take's
+            // sidecar is gigabytes, and copying it here froze the window.
+            if case .failure = result, let main = self.recordedFileURL,
+               PCMSidecar.hasRecoverableContent(at: PCMSidecar.url(for: main)) {
+                self.saveProgress = nil
+                CrashRecovery.recover(sidecar: PCMSidecar.url(for: main), main: main) { [weak self] recovered in
+                    guard let self else { completion?(); return }
+                    self.finishStop(result, recovered: recovered, diskReason: diskReason, completion: completion)
+                }
+                return
+            }
+            self.finishStop(result, recovered: nil, diskReason: diskReason, completion: completion)
+        }
+    }
 
-            switch result {
-            case .success(.some(let url)):
-                self.recordingTime = 0
-                self.recordedFileURL = nil
-                self.state = .ready
-                self.presentSavedConfirmation(url, note: diskNote)
-            case .success(.none):
-                self.recordingTime = 0
-                self.recordedFileURL = nil
-                if let reason = self.pendingDisconnectReason {
-                    self.state = .error(Self.noAudioCapturedMessage(reason: reason))
-                } else if let diskReason {
-                    self.state = .error(diskReason)
-                } else {
-                    self.state = .ready
-                }
-            case .failure(let error):
-                self.recordingTime = 0
-                if self.recoverSidecarIfNeeded(from: self.recordedFileURL, note: diskNote) != nil {
-                    self.recordedFileURL = nil
-                    if case .recording = self.state { self.state = .ready }
-                } else {
-                    let message = Self.stopFailureMessage(
-                        for: error, mainOutput: self.recordedFileURL,
-                        disconnectReason: self.pendingDisconnectReason)
-                    self.state = .error(diskReason.map { "\($0) \(message)" } ?? message)
-                }
+    /// The end of a stop: the take is saved, recovered (`recovered`), or
+    /// lost, and the faceplate says which.
+    private func finishStop(_ result: StopResult, recovered: Result<URL, Error>?, diskReason: String?,
+                            completion: (() -> Void)?) {
+        isFinalizingRecording = false
+        isStopping = false
+        saveProgress = nil
+        recordingTime = 0
+        let diskNote = diskReason.map { Self.diskStopNote(reason: $0) }
+
+        switch result {
+        case .success(.some(let url)):
+            recordedFileURL = nil
+            state = .ready
+            presentSavedConfirmation(url, note: diskNote)
+        case .success(.none):
+            recordedFileURL = nil
+            if let reason = pendingDisconnectReason {
+                state = .error(Self.noAudioCapturedMessage(reason: reason))
+            } else if let diskReason {
+                state = .error(diskReason)
+            } else {
+                state = .ready
             }
-            self.pendingDisconnectReason = nil
-            completion?()
-            if self.quitWhenStopped {
-                self.prepareForExit()
-                self.shouldQuit = true
+        case .failure(let error):
+            switch recovered {
+            case .success(let url)?:
+                recordedFileURL = nil
+                if case .recording = state { state = .ready }
+                presentSavedConfirmation(url, note: diskNote)
+            case .failure(let recoveryError)?:
+                state = .error("The recording couldn't be recovered: \(recoveryError.localizedDescription). The recovery file is still on disk — check disk space and permissions, then relaunch to retry.")
+            case nil:
+                let message = Self.stopFailureMessage(
+                    for: error, mainOutput: recordedFileURL, disconnectReason: pendingDisconnectReason)
+                state = .error(diskReason.map { "\($0) \(message)" } ?? message)
             }
+        }
+        pendingDisconnectReason = nil
+        completion?()
+        if quitWhenStopped {
+            prepareForExit()
+            shouldQuit = true
+            return
+        }
+        if inputSwitchAfterStop {
+            switchToFallbackInputAfterLoss()
         }
     }
 
@@ -369,25 +404,6 @@ public final class RecorderController {
         }
         let prefix = disconnectReason.map { "\($0). " } ?? ""
         return "\(prefix)Failed to finalize recording: \(error.localizedDescription)"
-    }
-
-    /// The main file failed: re-wrap the sidecar into a WAV now, so the
-    /// guest leaves with a file rather than a relaunch instruction.
-    private func recoverSidecarIfNeeded(from mainOutput: URL?, note: String?) -> URL? {
-        guard let mainOutput else { return nil }
-        let sidecar = PCMSidecar.url(for: mainOutput)
-        guard PCMSidecar.hasRecoverableContent(at: sidecar) else { return nil }
-        do {
-            let recovered = try PCMSidecar.recoverToWAV(sidecarURL: sidecar)
-            try? FileManager.default.removeItem(at: sidecar)
-            try? FileManager.default.removeItem(at: mainOutput)
-            presentSavedConfirmation(recovered, note: note)
-            return recovered
-        } catch {
-            Log.error("Sidecar recovery failed: \(error.localizedDescription)")
-            state = .error("The recording couldn't be recovered: \(error.localizedDescription). The recovery file is still on disk — check disk space and permissions, then relaunch to retry.")
-            return nil
-        }
     }
 
     // MARK: - Errors
